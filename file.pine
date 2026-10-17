@@ -1,23 +1,12 @@
 //@version=5
-// indicator("Indicator Versi Teguh", overlay=true)
-// indicator("Indicator Versi Teguh", overlay=true, max_labels_count=500, max_bars_back=200)
-indicator("Indicator Versi Teguh", overlay=true, max_labels_count=500, max_lines_count=500, max_bars_back=200)
+indicator("Indicator Versi Teguh", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=200)
 
 // =====================================================================
 //  INPUT
 // =====================================================================
-// Candle 1 & 3: body minimal X% dari total ekor (atas + bawah)
-//   100 = body sama dengan total ekor, di atas 100 = body makin dominan
-// group cabdle 1
-// bodyPct = input.float(60.0, "C1 & C3: body minimal (% dari total ekor)", minval=0.0, step=1.0, group="Candle 1 & 3")
 inputToleransiAvg = input.float(100.0, "Toleransi Body AVG (brp % dari AVG Body)", minval=0.0, step=1.0, group="Candle 1 & 3")
 
-// Candle 2: total ekor minimal Y% dari body
-//   100 = ekor sama dengan body, di bawah 100 = ekor boleh lebih pendek dari body
-// Group Candle 2
-// wickPct = input.float(30.0, "C2: ekor minimal (% dari body)", minval=0.0, step=1.0, group="Candle 2")
 wickPct = 50
-
 reqDrop = input.bool(true, "Candle 1 & 3 Drop", group="Candle 1 & 3")
 
 // Group Penanda
@@ -34,8 +23,6 @@ inputSensitifitas = input.string(
      group = "Sensitifitas")
 
 showDebugLegin = input.bool(false, "DEBUG", group="Debug")
-// showDebugLegout = input.bool(false, "DEBUG LEG OUT", group="Debug")
-// showDebugBase = input.bool(false, "DEBUG BASE", group="Debug")
 
 jmlLabel       = input.int(100, "Jumlah label debug", minval=1, maxval=400, group="Debug")
 geserKiri      = input.int(0, "Geser ke kiri (jumlah bar)", minval=0, group="Debug")
@@ -43,15 +30,17 @@ geserKiri      = input.int(0, "Geser ke kiri (jumlah bar)", minval=0, group="Deb
 // group Swing
 showSwing     = input.bool(true, "Tampilkan Zigzag Swing", group="Swing")
 // swingLookback = input.int(200, "Lookback (jumlah candle)", minval=20, group="Swing")
-swingMinBars  = input.int(75, "Jarak minimal antar swing (candle)", minval=1, group="Swing")
+swingMinBars  = input.int(3, "Jarak minimal antar swing (candle)", minval=1, group="Swing")
 swingHighCol  = input.color(color.red, "Warna Swing High", group="Swing")
 swingLowCol   = input.color(color.lime, "Warna Swing Low", group="Swing")
 zzLineCol     = input.color(color.white, "Warna garis zigzag", group="Swing")
 showLastSH   = input.bool(true, "Garis horizontal Swing High terakhir", group="Swing")
 lastSHLineCol = input.color(color.rgb(255, 105, 180), "Warna garis SH terakhir (pink)", group="Swing")
+swingBasis = input.string("Ekor", "Swing High/Low diambil dari", options=["Body", "Ekor"], group="Swing")
 
-showDbdSingle   = input.bool(false, "Tampilkan DBD Single", group="Penanda")
-showDbdMultiple = input.bool(false, "Tampilkan DBD Multiple", group="Penanda")
+showDbdSingle   = input.bool(true, "Tampilkan DBD Single", group="Penanda")
+showDbdMultiple = input.bool(true, "Tampilkan DBD Multiple", group="Penanda")
+backtestMode = input.bool(true, "Backtest Mode (buang zona yang sudah tersentuh harga)", group="Penanda")
 
 if inputSensitifitas == "MEDIUM"
     wickPct := 60
@@ -149,55 +138,30 @@ f_wickVsBody(float o, float h, float l, float c, float pct, offset) =>
     else
         false
 
-f_wickVsBodySingle(float o, float h, float l, float c, float pct, int offset, float openLegIn, float closeLegOut) =>
+f_wickVsBodySingle(float o, float h, float l, float c, float pct, int offset) =>
+    f_convertPip(f_body(o, c)) < f_convertPip(f_avgBodyInPrice(limitCandleAvg, 'dbd', offset)) or
+     f_convertPip(f_totalWick(o, h, l, c)) >= f_convertPip(f_body(o, c)) or
+     (f_isBullish(o, c) and f_convertPip(f_body(o, c)) > f_convertPip(f_totalWick(o, h, l, c)))
 
-    bool bodyWickOk =
-         f_convertPip(f_body(o, c)) < f_convertPip(f_avgBodyInPrice(limitCandleAvg, 'dbd', offset)) or
-         f_convertPip(f_totalWick(o, h, l, c)) >= f_convertPip(f_body(o, c)) or
-         (f_isBullish(o, c) and f_convertPip(f_body(o, c)) > f_convertPip(f_totalWick(o, h, l, c)))
+// Kode error 9: semua ekor atas base harus <= open leg in
+// false berarti ada base yang ekor atasnya menembus open leg in
+f_baseAtasOk(int nBase) =>
+    float openLegIn = open[nBase + 2]
+    bool ok = true
+    for j = 2 to nBase + 1
+        if high[j] > openLegIn
+            ok := false
+    ok
 
-    bool atasOk  = h <= openLegIn     // ekor atas tidak boleh melebihi open leg in
-    bool bawahOk = l >= closeLegOut   // ekor bawah tidak boleh di bawah close leg out
-
-    bodyWickOk and atasOk and bawahOk
-
-// f_baseMultiple(int nBase, float pct) =>
-//     bool ok = true
-//     for j = 2 to nBase + 1
-//         if not f_wickVsBody(open[j], high[j], low[j], close[j], pct, j)
-//             ok := false
-//             break
-//     ok
-
-// Validasi semua candle base ([2] .. [nBase+1]):
-//  - ekor atas tidak lebih tinggi dari open leg in
-//  - ekor bawah tidak lebih rendah dari low leg out
-//  - kalau base bullish, close tidak boleh melebihi open leg in
-//  - body base tidak boleh lebih besar dari body leg in maupun body leg out
-// f_baseMultiple(int nBase, float pct) =>
-//     float openLegIn  = open[nBase + 2]   // leg in = candle paling kiri
-//     float lowLegOut  = low[1]            // leg out = candle terakhir sebelum sekarang
-
-//     float bodyLegIn  = f_body(open[nBase + 2], close[nBase + 2])
-//     float bodyLegOut = f_body(open[1], close[1])
-//     float maxBody    = math.min(bodyLegIn, bodyLegOut)   // batas body base
-
-//     bool ok = true
-//     for j = 2 to nBase + 1
-//         bool wickOk  = f_wickVsBody(open[j], high[j], low[j], close[j], pct, j)
-//         bool atasOk  = high[j] <= openLegIn
-//         bool bawahOk = low[j]  >= lowLegOut
-
-//         // bullish: close harus <= open leg in (bearish otomatis lolos)
-//         bool bullishOk = not f_isBullish(open[j], close[j]) or close[j] <= openLegIn
-
-//         // body base <= body leg in dan <= body leg out
-//         bool bodyOk = f_body(open[j], close[j]) <= maxBody
-
-//         if not (wickOk and atasOk and bawahOk and bullishOk and bodyOk)
-//             ok := false
-//             break
-//     ok
+// Kode error 10: semua ekor bawah base harus >= low leg out
+// false berarti ada base yang ekor bawahnya turun melewati low leg out
+f_baseBawahOk(int nBase) =>
+    float lowLegOut = low[1]
+    bool ok = true
+    for j = 2 to nBase + 1
+        if low[j] < lowLegOut
+            ok := false
+    ok
 
 // Validasi base:
 //  Per candle:
@@ -208,37 +172,14 @@ f_wickVsBodySingle(float o, float h, float l, float c, float pct, int offset, fl
 //  Keseluruhan:
 //   - jarak base (puncak body - dasar body) <= 50% body leg in DAN leg out
 f_baseMultiple(int nBase, float pct) =>
-    float openLegIn  = open[nBase + 2]
-    float lowLegOut  = low[1]
-
-    float bodyLegIn  = f_body(open[nBase + 2], close[nBase + 2])
-    float bodyLegOut = f_body(open[1], close[1])
-
-    float puncakBase = open[2]
-    float dasarBase  = close[2]
-    bool  perCandleOk = true
+    bool perCandleOk = true
 
     for j = 2 to nBase + 1
-        // --- cek per candle ---
-        bool wickOk    = f_wickVsBody(open[j], high[j], low[j], close[j], pct, j)
-        bool atasOk    = high[j] <= openLegIn
-        bool bawahOk   = low[j]  >= lowLegOut
-        // bool bullishOk = not f_isBullish(open[j], close[j]) or close[j] <= openLegIn
+        bool wickOk = f_wickVsBody(open[j], high[j], low[j], close[j], pct, j)
 
-        if not (wickOk and atasOk and bawahOk)
+        if not wickOk
             perCandleOk := false
 
-        // --- cari puncak & dasar body base ---
-        float atasBody  = f_isDrop(open[j], close[j]) ? open[j]  : close[j]
-        float bawahBody = f_isDrop(open[j], close[j]) ? close[j] : open[j]
-
-        puncakBase := math.max(puncakBase, atasBody)
-        dasarBase  := math.min(dasarBase,  bawahBody)
-
-    float jarakBase = puncakBase - dasarBase
-    // bool  jarakOk   = f_convertPip(jarakBase) <= f_convertPip(bodyLegIn) * 0.7 and f_convertPip(jarakBase) <= bodyLegOut * 0.7
-
-    // perCandleOk and jarakOk
     perCandleOk
 
 // Jarak base = puncak body tertinggi - dasar body terendah di semua candle base
@@ -272,72 +213,29 @@ f_baseBottom(int nBase) =>
     for j = 3 to nBase + 1
         b := math.min(b, low[j])
     b
+
+// true kalau body candle >= rata-rata body (dipakai sebagai error code 5)
+f_bodyAvgOk(float o, float c, int offset) =>
+    f_convertPip(f_body(o, c)) >= f_convertPip(f_avgBodyInPrice(limitCandleAvg, 'dbd', offset))
+
+// Kode error 7: body leg in >= total ekor leg in
+// false berarti ekor leg in lebih panjang daripada body
+f_legInBodyOk(float o, float h, float l, float c) =>
+    f_convertPip(f_body(o, c)) >= f_convertPip(f_totalWick(o, h, l, c))
         
-// candle leg in  yang valid, apabila body lebih besar daripada ekor
 f_legIn_valid(float o, float h, float l, float c, float toleransi_persen, string mode, int offset) =>
     if mode == 'dbd' and inputSensitifitas == 'HIGH'
-        is_drop_candle = f_isDrop(o, c)
-        avg_body = f_avgBodyInPrice(limitCandleAvg, mode, offset)
-        body = f_body(o, c)
-        nilai_body_allowed = avg_body
-        is_drop_candle and body >= nilai_body_allowed and body > f_totalWick(o, h, l, c)
+        f_isDrop(o, c) and f_body(o, c) > f_totalWick(o, h, l, c)
 
     else if mode == 'dbd' and inputSensitifitas == 'MEDIUM'
-
-        is_drop_candle = f_isDrop(o, c)
-        body = f_body(o, c)
-        avg_body = f_avgBodyInPrice(limitCandleAvg, mode, offset)
-        nilai_body_allowed =  avg_body
-        is_drop_candle and body >= f_totalWick(o, h, l, c)  and body >= nilai_body_allowed
+        f_isDrop(o, c) and f_body(o, c) >= f_totalWick(o, h, l, c)
 
     else if mode == 'dbd' and inputSensitifitas == 'LOW'
-
-        is_drop_candle = f_isDrop(o, c)
-        body = f_body(o, c)
-
-        avg_body = f_avgBodyInPrice(limitCandleAvg, mode, offset)
-        nilai_body_allowed = avg_body
-
-        // is_drop_candle and body >= nilai_body_allowed 
-        total_ekor = f_totalWick(o, h, l, c)
-        is_drop_candle  and f_convertPip(body) >= f_convertPip(total_ekor) and  f_convertPip(body) >= f_convertPip(nilai_body_allowed) 
+        f_isDrop(o, c)          // syarat body vs ekor dipindah ke error code 7
 
     else
         false
 
-// candle leg out  yang valid, apabila body lebih besar daripada ekor
-f_legOut_valid_backup(float o, float h, float l, float c, float toleransi_persen, string mode, int offset) =>
-    if mode == 'dbd' and inputSensitifitas == 'HIGH'
-        is_drop_candle = f_isDrop(o, c)
-        avg_body = f_avgBodyInPrice(limitCandleAvg, mode, offset)
-        body = f_body(o, c)
-        nilai_body_allowed = avg_body
-        is_drop_candle and body >= nilai_body_allowed and body > f_totalWick(o, h, l, c)
-
-    else if mode == 'dbd' and inputSensitifitas == 'MEDIUM'
-
-        is_drop_candle = f_isDrop(o, c)
-        body = f_body(o, c)
-        avg_body = f_avgBodyInPrice(limitCandleAvg, mode, offset)
-        nilai_body_allowed = avg_body
-
-        is_drop_candle and body >= f_totalWick(o, h, l, c)  and body >= nilai_body_allowed 
-
-    else if mode == 'dbd' and inputSensitifitas == 'LOW'
-
-        is_drop_candle = f_isDrop(o, c)
-        body = f_body(o, c)
-
-        avg_body = f_avgBodyInPrice(limitCandleAvg, mode, offset)
-        nilai_body_allowed = avg_body
-
-        // is_drop_candle and body >= f_totalWick(o, h, l, c)  and  body >= nilai_body_allowed
-        total_ekor = f_totalWick(o, h, l, c)
-        is_drop_candle  and f_convertPip(body) >= f_convertPip(total_ekor) and  f_convertPip(body) >= f_convertPip(nilai_body_allowed) 
-
-
-    else
-        false
 
 // =====================================================================
 // FVG LEG IN DBD
@@ -405,69 +303,29 @@ f_dbd_tipe_2(okLegIn, okLegOut, okCandle2, okFvgLegIn, dropOK) =>
 f_dbd_tipe_3(okLegIn, okLegOut, okCandle2, okFvgLegOut, dropOK) =>
     okLegIn and okLegOut and okCandle2 and okFvgLegOut and dropOK
 
-// Return: jumlah candle base (n), atau 0 kalau tidak ada pola
-// f_dbd_tipe_5(int minBase, int maxBase, float pct, bool needDrop) =>
-//     int found = 0
+// Kode error 8: body leg out >= total ekor leg out
+// false berarti ekor leg out lebih panjang daripada body
+f_legOutBodyOk(float o, float h, float l, float c) =>
+    f_convertPip(f_body(o, c)) >= f_convertPip(f_totalWick(o, h, l, c))
 
-//     bool dropOut = not needDrop or f_isDrop(open[1], close[1])
-
-//     if dropOut
-//         for n = minBase to maxBase
-//             int k = n + 2
-
-//             bool okLegOut = f_legOut_valid(open[1], high[1], low[1], close[1], open[k], inputToleransiAvg, 'dbd', 1)
-//             bool okLegIn = f_legIn_valid( open[k], high[k], low[k], close[k], inputToleransiAvg, 'dbd', k)
-
-//             bool dropIn = not needDrop or f_isDrop(open[k], close[k])
-
-//             if okLegOut and okLegIn and dropIn and f_baseMultiple(n, pct)
-//                 found := n
-//                 break
-
-//     found
-
-// candle leg out yang valid, apabila body lebih besar daripada ekor
-// DAN close leg out < open leg in
-// Leg out valid: drop, body >= ekor & >= avg body,
-// close < open leg in, dan close < close leg in
+// candle leg out valid: drop, body vs ekor (sesuai sensitifitas), dan posisi close
+// close leg out harus di bawah open leg in dan close leg in
+// cek body >= AVG sudah dipindah ke f_bodyAvgOk (error code 6)
 f_legOut_valid(float o, float h, float l, float c, float openLegIn, float closeLegIn, float toleransi_persen, string mode, int offset) =>
-    // syarat tambahan: close leg out di bawah open leg in dan close leg in
-    bool closeDiBawahOpenLegIn  = c < openLegIn
-    bool closeDiBawahCloseLegIn = c < closeLegIn
-    bool posisiOk = closeDiBawahOpenLegIn and closeDiBawahCloseLegIn
+    bool posisiOk = c < openLegIn and c < closeLegIn
 
     if mode == 'dbd' and inputSensitifitas == 'HIGH'
-        is_drop_candle = f_isDrop(o, c)
-        avg_body = f_avgBodyInPrice(limitCandleAvg, mode, offset)
-        body = f_body(o, c)
-        nilai_body_allowed = avg_body
-        // HIGH: body harus > ekor
-        is_drop_candle and body >= nilai_body_allowed and body > f_totalWick(o, h, l, c) and posisiOk
+        f_isDrop(o, c) and f_body(o, c) > f_totalWick(o, h, l, c) and posisiOk
 
     else if mode == 'dbd' and inputSensitifitas == 'MEDIUM'
-
-        is_drop_candle = f_isDrop(o, c)
-        body = f_body(o, c)
-        avg_body = f_avgBodyInPrice(limitCandleAvg, mode, offset)
-        nilai_body_allowed = avg_body
-
-        // MEDIUM: body >= ekor
-        is_drop_candle and body >= f_totalWick(o, h, l, c) and body >= nilai_body_allowed and posisiOk
+        f_isDrop(o, c) and f_body(o, c) >= f_totalWick(o, h, l, c) and posisiOk
 
     else if mode == 'dbd' and inputSensitifitas == 'LOW'
-
-        is_drop_candle = f_isDrop(o, c)
-        body = f_body(o, c)
-
-        avg_body = f_avgBodyInPrice(limitCandleAvg, mode, offset)
-        nilai_body_allowed = avg_body
-
-        total_ekor = f_totalWick(o, h, l, c)
-        // LOW: perbandingan dalam pip
-        is_drop_candle and f_convertPip(body) >= f_convertPip(total_ekor) and f_convertPip(body) >= f_convertPip(nilai_body_allowed) and posisiOk
+        f_isDrop(o, c) and posisiOk     // syarat body vs ekor dipindah ke error code 8
 
     else
         false
+
 
 // Return: [n base, skor]  (skor: 3=AAA, 2=AA, 1=A, 99=NO FVG, 0=tidak valid)
 // Return: [n base, jumlah error, kode error]
@@ -519,14 +377,38 @@ f_dbd_multiple(int minBase, int maxBase, float pct, bool needDrop) =>
                         errCount += 1
                         errCodes += "4 "
 
+                    if not f_bodyAvgOk(open[k], close[k], k)
+                        errCount += 1
+                        errCodes += "5 "
+
+                    if not f_bodyAvgOk(open[1], close[1], 1)
+                        errCount += 1
+                        errCodes += "6 "
+
+                    if not f_legInBodyOk(open[k], high[k], low[k], close[k])
+                        errCount += 1
+                        errCodes += "7 "
+
+                    if not f_legOutBodyOk(open[1], high[1], low[1], close[1])
+                        errCount += 1
+                        errCodes += "8 "
+
+                    if not f_baseAtasOk(n)
+                        errCount += 1
+                        errCodes += "9 "
+
+                    if not f_baseBawahOk(n)
+                        errCount += 1
+                        errCodes += "10 "
+
                     break
 
     [nFound, errCount, str.trim(errCodes)]
 
-// 0 error = A, 1 = B, 2 = C, dst (maksimal H)
+// 0 error = A, 1 = B, 2 = C, dst (maksimal Z)
 f_gradeText(int errCount, string errCodes) =>
-    int idx = math.min(errCount, 7)
-    string g = str.substring("ABCDEFGH", idx, idx + 1)
+    int idx = math.min(errCount, 25)
+    string g = str.substring("ABCDEFGHIJKLMNOPQRSTUVWXYZ", idx, idx + 1)
     g + (errCount > 0 ? " [" + str.replace_all(errCodes, " ", ",") + "]" : "")
 
 // =====================================================================
@@ -546,7 +428,7 @@ f_dbd_single(
 
     bool okLegIn = f_legIn_valid(o1, h1, l1, c1, inputToleransiAvg, 'dbd', 3)
     // bool okCandle2 = f_wickVsBody(o2, h2, l2, c2, wickPctIn, 2)
-    bool okCandle2 = f_wickVsBodySingle(o2, h2, l2, c2, wickPctIn, 2, o1, c3)
+    bool okCandle2 = f_wickVsBodySingle(o2, h2, l2, c2, wickPctIn, 2)
     bool okLegOut = f_legOut_valid(o3, h3, l3, c3, o1, c1, inputToleransiAvg, 'dbd', 1)
 
     bool okFvgLegIn  = f_fvg_legin_dbd(lowLeftFvgLegIn, highRightFvgLegIn)
@@ -582,146 +464,45 @@ f_dbd_single(
             errCount += 1
             errCodes += "4 "
 
+        if not f_bodyAvgOk(o1, c1, 3)
+            errCount += 1
+            errCodes += "5 "
+
+        if not f_bodyAvgOk(o3, c3, 1)
+            errCount += 1
+            errCodes += "6 "
+
+        if not f_legInBodyOk(o1, h1, l1, c1)
+            errCount += 1
+            errCodes += "7 "
+
+        if not f_legOutBodyOk(o3, h3, l3, c3)
+            errCount += 1
+            errCodes += "8 "
+
+        if h2 > o1
+            errCount += 1
+            errCodes += "9 "
+
+        if l2 < c3
+            errCount += 1
+            errCodes += "10 "
+
     [valid, errCount, str.trim(errCodes)]
 
-    // ================================================================
-    // HITUNG SCORE
-    // ================================================================
+var array<int>    zLeft      = array.new<int>()
+var array<int>    zRight     = array.new<int>()
+var array<float>  zTop       = array.new<float>()   // ekor tertinggi base
+var array<float>  zBot       = array.new<float>()   // ekor terendah base
+var array<int>    zStart     = array.new<int>()     // scan ke kanan mulai dari bar ini
+var array<int>    zLblX      = array.new<int>()
+var array<string> zText      = array.new<string>()
+var array<bool>   zIsSingle  = array.new<bool>()
+var array<bool>   zShowLbl   = array.new<bool>()
+var array<bool>   zShowBox   = array.new<bool>()
+var array<box>    zoneBoxes  = array.new<box>()
+var array<label>  zoneLabels = array.new<label>()
 
-    // int score = 0
-
-    // if inputSensitifitas == 'HIGH' or inputSensitifitas == 'MEDIUM'
-    //     if f_dbd_tipe_2(okLegIn, okLegOut, okCandle2, okFvgLegIn, dropOK)
-    //         score += 1
-
-    //     // section kalau base adalah bullish/bearish, dan ekornya lebih tinggi dibanding body
-    //     else if f_dbd_tipe_3(okLegIn, okLegOut, okCandle2, okFvgLegOut, dropOK)
-    //         score += 2
-
-    //     else if f_dbd_tipe_1(okLegIn, okLegOut, okCandle2, okFvgLegIn, okFvgLegOut, dropOK)
-    //         score += 3
-
-        
-
-    // else if inputSensitifitas == 'LOW'
-        
-        // if f_dbd_tipe_2(okLegIn, okLegOut, okCandle2, okFvgLegIn, dropOK)
-        //     score += 1
-
-        // // section kalau base adalah bullish/bearish, dan ekornya lebih tinggi dibanding body
-        // else if f_dbd_tipe_3(okLegIn, okLegOut, okCandle2, okFvgLegOut, dropOK)
-        //     score += 2
-
-        // else if f_dbd_tipe_1(okLegIn, okLegOut, okCandle2, okFvgLegIn, okFvgLegOut, dropOK)
-        //     score += 3
-
-       
-
-        // // section kalau gak ada FVG
-        // else if okLegIn and okLegOut and okCandle2 and dropOK 
-        //     score += 99
-       
-
-    // ================================================================
-    // CETAK SCORE
-    // ================================================================
-
-    // string skor =
-    //      score == 3 ? "AAA" :
-    //      score == 2 ? "AA" :
-    //      score == 1 ? "A" :
-    //      score == 4 ? "AAA" :
-    //      score == 99 ? "NO FVG" :
-    //      "F"
-
-    // skor
-    // score
-
-
-
-// skorDbdSingle = f_dbd_single(
-//      open[3], high[3], low[3], close[3],     // C1
-//      open[2], high[2], low[2], close[2],     // C2
-//      open[1], high[1], low[1], close[1],     // C3
-
-//      low[4],                                  // FVG Leg In - kiri
-//      high[2],                                 // FVG Leg In - kanan
-
-//      low[2],                                  // FVG Leg Out - kiri
-//      high[0],                                 // FVG Leg Out - kanan
-
-//      reqDrop,
-//      wickPct)
-
-// // =====================================================================
-// //  PENANDA (panah + angka di atas candle)
-// //  plotshape harus berada di scope global, tidak bisa di dalam fungsi
-// // =====================================================================
-// // markCondDbdSingle = isValidDbdSingle and barstate.isconfirmed and showArrow
-// markCondDbdSingle =
-//      skorDbdSingle != 0 and
-//      barstate.isconfirmed and
-//      showArrow and showDbdSingle
-// markRectangleBase = skorDbdSingle != 0 and barstate.isconfirmed and showDbdSingle
-
-
-// // -------------------------------------------------------------
-// // A+
-// // -------------------------------------------------------------
-
-// plotshape(
-//      markCondDbdSingle and skorDbdSingle >= 3,
-//      title="DBD Single AAA",
-//      style=shape.labeldown,
-//      location=location.abovebar,
-//      color=markerColor,
-//      text="A",
-//      textcolor=color.black,
-//      size=size.tiny,
-//      offset=-2)
-
-
-// // -------------------------------------------------------------
-// // A
-// // -------------------------------------------------------------
-
-// plotshape(
-//      markCondDbdSingle and skorDbdSingle == 2,
-//      title="DBD Single AA",
-//      style=shape.labeldown,
-//      location=location.abovebar,
-//      color=markerColor,
-//      text="B - 1 FVG",
-//      textcolor=color.black,
-//      size=size.tiny,
-//      offset=-2)
-
-// // -------------------------------------------------------------
-// // A-
-// // -------------------------------------------------------------
-
-// plotshape(
-//      markCondDbdSingle and skorDbdSingle == 1,
-//      title="DBD Single A",
-//      style=shape.labeldown,
-//      location=location.abovebar,
-//      color=markerColor,
-//      text="B - 1 FVG",
-//      textcolor=color.black,
-//      size=size.tiny,
-//      offset=-2)
-
-
-// plotshape(
-//      markCondDbdSingle and skorDbdSingle == 99,
-//      title="DBD Single A",
-//      style=shape.labeldown,
-//      location=location.abovebar,
-//      color=markerColor,
-//      text="C - NO FVG",
-//      textcolor=color.black,
-//      size=size.tiny,
-//      offset=-2)
 
 [validSingle, errSingle, errCodeSingle] = f_dbd_single(
      open[3], high[3], low[3], close[3],     // C1
@@ -735,7 +516,7 @@ f_dbd_single(
 markSingle        = validSingle and barstate.isconfirmed and showArrow and showDbdSingle
 markRectangleBase = validSingle and barstate.isconfirmed and showDbdSingle
 
-if markSingle
+if markSingle and not backtestMode
     label.new(
          bar_index - 2,
          high[2],
@@ -761,15 +542,56 @@ if barstate.isconfirmed and bar_index >= 10
         for d = 1 to nBaseMulti + 2          // leg out=[1], base=[2..n+1], leg in=[n+2]
             patFlag.set(bar_index - d, 1)
 
+var array<int> baseFlag = array.new<int>()
+var array<int> baseZone = array.new<int>()
+while baseFlag.size() <= bar_index
+    baseFlag.push(0)
+    baseZone.push(-1)
+
+if barstate.isconfirmed and bar_index >= 10
+    if validSingle
+        baseFlag.set(bar_index - 2, 1)
+    if nBaseMulti != 0
+        for d = 2 to nBaseMulti + 1
+            baseFlag.set(bar_index - d, 1)
+
 markMulti = nBaseMulti != 0 and barstate.isconfirmed and showArrow and showDbdMultiple
 
 // 0 error = A, 1 = B, 2 = C, 3 = D, dst (maksimal sampai H)
 string gradeMulti = str.substring("ABCDEFGH", math.min(errMulti, 7), math.min(errMulti, 7) + 1)
 
-string txtMulti = nBaseMulti == 0 ? "" :
-     gradeMulti + (errMulti > 0 ? " [" + str.replace_all(errCodeMulti, " ", ",") + "]" : "")
 
-if markMulti
+string txtMulti = nBaseMulti == 0 ? "" : f_gradeText(errMulti, errCodeMulti)
+// ---- simpan zona Single ----
+if backtestMode and markRectangleBase
+    zLeft.push(bar_index - 3)
+    zRight.push(bar_index - 1)
+    zTop.push(high[2])
+    zBot.push(low[2])
+    zStart.push(bar_index)
+    zLblX.push(bar_index - 2)
+    zText.push(f_gradeText(errSingle, errCodeSingle))
+    zIsSingle.push(true)
+    zShowLbl.push(showArrow)
+    zShowBox.push(showDbdSingle)
+    baseZone.set(bar_index - 2, zTop.size() - 1)
+
+// ---- simpan zona Multiple ----
+if backtestMode and nBaseMulti != 0 and barstate.isconfirmed and showDbdMultiple
+    zLeft.push(bar_index - (nBaseMulti + 1))
+    zRight.push(bar_index - 2)
+    zTop.push(f_baseTop(nBaseMulti))
+    zBot.push(f_baseBottom(nBaseMulti))
+    zStart.push(bar_index)
+    zLblX.push(bar_index - 2)
+    zText.push(txtMulti)
+    zIsSingle.push(false)
+    zShowLbl.push(showArrow)
+    zShowBox.push(showDbdMultiple)
+    for d = 2 to nBaseMulti + 1
+        baseZone.set(bar_index - d, zTop.size() - 1)
+
+if markMulti and not backtestMode
     box.new(
          left   = bar_index - (nBaseMulti + 1),
          top    = f_baseTop(nBaseMulti),
@@ -793,7 +615,7 @@ if markMulti
 // =====================================================================
 // KOTAK CANDLE 2
 // =====================================================================
-if markRectangleBase
+if markRectangleBase and not backtestMode
     box.new(
          left = bar_index - 3,
          top = high[2],
@@ -899,16 +721,103 @@ f_validSL(array<float> topA, array<float> botA, int pIdx, int toIdx) =>
 // =====================================================================
 // ZIGZAG SWING (berbasis BODY, seluruh candle yang ter-load)
 // =====================================================================
-var array<float> topArr  = array.new<float>()
-var array<float> botArr  = array.new<float>()
+var array<float> topArr  = array.new<float>()   // puncak body
+var array<float> botArr  = array.new<float>()   // dasar body
+var array<float> hiArr   = array.new<float>()   // puncak ekor (high)
+var array<float> loArr   = array.new<float>()   // dasar ekor (low)
+var array<float> shArr   = array.new<float>()   // harga untuk Swing High
+var array<float> slArr   = array.new<float>()   // harga untuk Swing Low
 var array<int>   timeArr = array.new<int>()
 var array<label> swingLabels = array.new<label>()
 var array<line>  zzLines     = array.new<line>()
 var line lastSHLine = na
+var label lastSHLabel = na
 
-topArr.push(math.max(open, close))
-botArr.push(math.min(open, close))
-timeArr.push(time)
+
+// true = zona INVALID: high base DAN low base sama-sama sudah tersentuh
+// oleh body candle di kanan (boleh candle yang berbeda)
+f_zonaInvalid(float levelAtas, float levelBawah, int startIdx) =>
+    bool kenaHigh = false
+    bool kenaLow  = false
+    int  endIdx   = barstate.isconfirmed ? bar_index : bar_index - 1
+    for i = startIdx to endIdx
+        float bTop = topArr.get(i)
+        float bBot = botArr.get(i)
+
+        if not kenaHigh and levelAtas >= bBot and levelAtas <= bTop
+            kenaHigh := true
+        if not kenaLow and levelBawah >= bBot and levelBawah <= bTop
+            kenaLow := true
+
+        if kenaHigh and kenaLow
+            break
+    kenaHigh and kenaLow
+
+// true = candle i adalah base yang boleh ditabrak garis pink
+// Backtest Mode aktif: zona base itu juga harus belum tersentuh harga
+f_baseAktif(int i) =>
+    bool ok = false
+    if i >= 0 and i < baseFlag.size()
+        if baseFlag.get(i) == 1
+            if not backtestMode
+                ok := true
+            else
+                int zid = baseZone.get(i)
+                if zid >= 0 and zid < zTop.size()
+                    ok := not f_zonaInvalid(zTop.get(zid), zBot.get(zid), zStart.get(zid))
+    ok
+
+while topArr.size() <= bar_index
+    topArr.push(0.0)
+    botArr.push(0.0)
+    hiArr.push(0.0)
+    loArr.push(0.0)
+    shArr.push(0.0)
+    slArr.push(0.0)
+    timeArr.push(0)
+
+topArr.set(bar_index, math.max(open, close))
+botArr.set(bar_index, math.min(open, close))
+hiArr.set(bar_index, high)
+loArr.set(bar_index, low)
+shArr.set(bar_index, swingBasis == "Body" ? math.max(open, close) : high)
+slArr.set(bar_index, swingBasis == "Body" ? math.min(open, close) : low)
+timeArr.set(bar_index, time)
+
+// gambar ulang hanya saat data historis selesai dimuat, lalu sekali di awal tiap bar baru
+bool doDraw = barstate.islastconfirmedhistory or (barstate.isrealtime and barstate.isnew)
+// if barstate.islast and backtestMode
+if doDraw and backtestMode
+    while zoneBoxes.size() > 0
+        box.delete(zoneBoxes.pop())
+    while zoneLabels.size() > 0
+        label.delete(zoneLabels.pop())
+
+    // dari terbaru ke lama, berhenti di 450 supaya aman dari limit 500
+    for z = zTop.size() - 1 to 0
+        if zoneBoxes.size() >= 450
+            break
+
+        if not f_zonaInvalid(zTop.get(z), zBot.get(z), zStart.get(z))
+            bool  isSingle = zIsSingle.get(z)
+            color col      = isSingle ? color.blue : color.orange
+
+            zoneBoxes.push(box.new(
+                 left = timeArr.get(zLeft.get(z)), top = zTop.get(z),
+                 right = timeArr.get(zRight.get(z)), bottom = zBot.get(z),
+                 xloc = xloc.bar_time,
+                 border_color = col, border_width = 1,
+                 bgcolor = color.new(col, 85)))
+
+            if zShowLbl.get(z)
+                zoneLabels.push(label.new(
+                     x = timeArr.get(zLblX.get(z)), y = zTop.get(z),
+                     xloc = xloc.bar_time,
+                     text = zText.get(z),
+                     style = label.style_label_down,
+                     color = isSingle ? markerColor : color.orange,
+                     textcolor = color.black,
+                     size = size.tiny))
 
 if barstate.islast
     while swingLabels.size() > 0
@@ -920,25 +829,28 @@ if barstate.islast
         line.delete(lastSHLine)
         lastSHLine := na
 
+    if not na(lastSHLabel)
+        label.delete(lastSHLabel)
+        lastSHLabel := na
+
     if showSwing and bar_index >= 1
-        array<float> swP   = array.new<float>()
-        array<int>   swIdx = array.new<int>()
-        array<int>   swT   = array.new<int>()   // 1 = high, -1 = low
+        array<float> swP   = array.new_float()
+        array<int>   swIdx = array.new_int()
+        array<int>   swT   = array.new_int() 
 
         // mulai dari bar pertama, leg awal = naik
         int   dir    = 1
-        float extP   = topArr.get(0)
+        float extP   = shArr.get(0)
         int   extIdx = 0
-        float oppP   = botArr.get(0)
+        float oppP   = slArr.get(0)
         int   oppIdx = 0
 
         for idx = 1 to bar_index
-            float topB = topArr.get(idx)
-            float botB = botArr.get(idx)
+            float topB = shArr.get(idx)
+            float botB = slArr.get(idx)
 
             if dir == 1
                 if topB > extP
-                    // puncak baru lebih tinggi -> ganti, lembah dihitung ulang
                     extP   := topB
                     extIdx := idx
                     oppP   := botB
@@ -954,12 +866,11 @@ if barstate.islast
                         dir    := -1
                         extP   := oppP
                         extIdx := oppIdx
-                        // cari puncak body tertinggi setelah lembah baru
-                        oppP   := topArr.get(extIdx)
+                        oppP   := shArr.get(extIdx)
                         oppIdx := extIdx
                         for j = extIdx to idx
-                            if topArr.get(j) > oppP
-                                oppP   := topArr.get(j)
+                            if shArr.get(j) > oppP
+                                oppP   := shArr.get(j)
                                 oppIdx := j
             else
                 if botB < extP
@@ -978,13 +889,13 @@ if barstate.islast
                         dir    := 1
                         extP   := oppP
                         extIdx := oppIdx
-                        // cari lembah body terendah setelah puncak baru
-                        oppP   := botArr.get(extIdx)
+                        oppP   := slArr.get(extIdx)
                         oppIdx := extIdx
                         for j = extIdx to idx
-                            if botArr.get(j) < oppP
-                                oppP   := botArr.get(j)
+                            if slArr.get(j) < oppP
+                                oppP   := slArr.get(j)
                                 oppIdx := j
+            
 
         // swing terakhir (leg yang masih berjalan)
         swP.push(extP)
@@ -1001,17 +912,54 @@ if barstate.islast
                 break
 
         // harga garis pink: telusuri ke kiri dari SH terakhir
+        // valid kalau harga menabrak candle BASE dari DBD (ekor bawah / body / ekor atas)
+        // harga akhir = high (ekor atas) candle base yang ketabrak
         float pinkPrice = lastSHPrice
-        if not na(lastSHIdx) and lastSHIdx > 0
-            for i = lastSHIdx - 1 to 0
-                float tb = topArr.get(i)
-                float bb = botArr.get(i)
+        bool  pinkValid = false
+        int   hitIdx    = na
+        int   curRefIdx = lastSHIdx          // SH yang sedang jadi acuan
+        array<string> skipList  = array.new_string() // SH yang dilewati
 
-                // acuan menyentuh body candle ini
-                if pinkPrice >= bb and pinkPrice <= tb
-                    pinkPrice := tb                 // acuan baru = body atas candle ini
-                    if patFlag.get(i) == 1          // candle bagian pola -> stop
+        if not na(lastSHIdx) and lastSHIdx > 0
+            int i = lastSHIdx - 1
+            while i >= 0
+                // selalu pakai ekor (high/low) untuk cek tabrakan
+                float cTop = hiArr.get(i)
+                float cBot = loArr.get(i)
+
+                if pinkPrice >= cBot and pinkPrice <= cTop
+                    if f_baseAktif(i)
+                        pinkPrice := cTop
+                        pinkValid := true
+                        hitIdx    := i
                         break
+                    else if patFlag.get(i) == 1
+                        // leg in / leg out / base yang sudah invalid: bagian dari DBD,
+                        // jangan loncat, cek candle di kirinya dengan harga yang sama
+                        i -= 1
+                        continue
+                    else
+                        // candle biasa -> loncat ke SH di kirinya (kode lama tetap)
+                        int   nextIdx   = na
+                        float nextPrice = na
+                        for k = swP.size() - 1 to 0
+                            if swT.get(k) == 1 and swIdx.get(k) < i
+                                nextIdx   := swIdx.get(k)
+                                nextPrice := swP.get(k)
+                                break
+
+                        if na(nextIdx)
+                            break
+
+                        skipList.push(
+                             str.format_time(timeArr.get(curRefIdx), "dd/MM HH:mm", "GMT+7") +
+                             " @ " + str.tostring(pinkPrice, format.mintick))
+
+                        curRefIdx := nextIdx
+                        pinkPrice := nextPrice
+                        i         := nextIdx - 1
+                        continue
+                i -= 1
 
         if showLastSH and not na(lastSHIdx)
             lastSHLine := line.new(
@@ -1022,6 +970,29 @@ if barstate.islast
                  color  = lastSHLineCol,
                  width  = 2)
 
+            string waktuDbd = pinkValid and not na(hitIdx) ?
+                 "\nDBD: " + str.format_time(timeArr.get(hitIdx), "dd/MM HH:mm", "GMT+7") :
+                 "\nDBD: tidak ditemukan"
+
+            string txtSkip = ""
+            int    nSkip   = skipList.size()
+            if nSkip > 0
+                txtSkip := "\nPuncak dilewati (" + str.tostring(nSkip) + "):"
+                for s = 0 to math.min(nSkip, 6) - 1
+                    txtSkip += "\n- " + skipList.get(s)
+                if nSkip > 6
+                    txtSkip += "\n- +" + str.tostring(nSkip - 6) + " lainnya"
+            else
+                txtSkip := "\nPuncak dilewati: tidak ada"
+
+            lastSHLabel := label.new(
+                 x         = lastSHIdx,
+                 y         = pinkPrice,
+                 text      = "Garis Control - " + str.tostring(pinkPrice, format.mintick) + waktuDbd + txtSkip,
+                 style     = label.style_label_down,
+                 color     = color.new(lastSHLineCol, 100),
+                 textcolor = lastSHLineCol,
+                 size      = size.small)
 
         // gambar garis + label (pakai waktu, bukan bar_index)
         for k = 0 to swP.size() - 1
@@ -1036,12 +1007,12 @@ if barstate.islast
                      xloc = xloc.bar_time,
                      color = zzLineCol, width = 1))
 
-            swingLabels.push(label.new(
-                 x = x,
-                 y = y,
-                 xloc = xloc.bar_time,
-                 text = (isHigh ? "SH " : "SL ") + str.tostring(y, format.mintick),
-                 style = isHigh ? label.style_label_down : label.style_label_up,
-                 color = isHigh ? swingHighCol : swingLowCol,
-                 textcolor = isHigh ? color.white : color.black,
-                 size = size.tiny))
+            // swingLabels.push(label.new(
+            //      x = x,
+            //      y = y,
+            //      xloc = xloc.bar_time,
+            //      text = (isHigh ? "SH " : "SL ") + str.tostring(y, format.mintick),
+            //      style = isHigh ? label.style_label_down : label.style_label_up,
+            //      color = isHigh ? swingHighCol : swingLowCol,
+            //      textcolor = isHigh ? color.white : color.black,
+            //      size = size.tiny))
