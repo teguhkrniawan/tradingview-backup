@@ -37,12 +37,18 @@ zzLineCol     = input.color(color.white, "Warna garis zigzag", group="Swing")
 showLastSH   = input.bool(true, "Garis horizontal Swing High terakhir", group="Swing")
 lastSHLineCol = input.color(color.rgb(255, 105, 180), "Warna garis SH terakhir (pink)", group="Swing")
 swingBasis = input.string("Ekor", "Swing High/Low diambil dari", options=["Body", "Ekor"], group="Swing")
+showLastSL    = input.bool(true, "Garis horizontal Swing Low terakhir (RBR)", group="Swing")
+lastSLLineCol = input.color(color.lime, "Warna garis SL terakhir (hijau)", group="Swing")
 
 showDbdSingle   = input.bool(true, "Tampilkan DBD Single", group="Penanda")
 showRbrSingle = input.bool(true, "Tampilkan RBR Single", group="Penanda")
 showDbdMultiple = input.bool(true, "Tampilkan DBD Multiple", group="Penanda")
 showRbrMultiple = input.bool(true, "Tampilkan RBR Multiple", group="Penanda")
 backtestMode = input.bool(true, "Backtest Mode (buang zona yang sudah tersentuh harga)", group="Penanda")
+
+inputMinGrade = input.string("C", "Grade minimum yang ditampilkan", options=["A","B","C","D","E","F","G","H","I","J","K"], group="Sensitifitas", tooltip="Pilih C: tampil C, B, A. Pilih B: tampil B, A. K = tampilkan semua.")
+
+inputTinggiBodyBase = input.bool(true, "Tinggi body base vs legin/legout (body base tidak boleh lebih besar)", group="Base")
 
 if inputSensitifitas == "MEDIUM"
     wickPct := 60
@@ -212,6 +218,21 @@ f_jarakBaseOk(int nBase, float maxRasio) =>
     float bodyLegOut = f_body(open[1], close[1])
     jarak <= bodyLegIn * maxRasio and jarak <= bodyLegOut * maxRasio
 
+// Validasi MANDATORY (bisa di-toggle): body tiap candle base tidak boleh
+// lebih besar dari body leg in ATAU body leg out.
+// Base ada di [2] .. [nBase+1], leg out = [1], leg in = [nBase+2]
+// Single = nBase 1. Dipakai untuk DBD maupun RBR.
+f_baseBodyOk(int nBase) =>
+    bool ok = true
+    if inputTinggiBodyBase
+        float bodyLegIn  = f_body(open[nBase + 2], close[nBase + 2])
+        float bodyLegOut = f_body(open[1], close[1])
+        for j = 2 to nBase + 1
+            float bodyBase = f_body(open[j], close[j])
+            if bodyBase > bodyLegIn or bodyBase > bodyLegOut
+                ok := false
+    ok
+
 f_baseTop(int nBase) =>
     float t = high[2]
     for j = 3 to nBase + 1
@@ -363,7 +384,8 @@ f_dbd_multiple(int minBase, int maxBase, float pct, bool needDrop) =>
                  inputToleransiAvg, 'dbd', k)
             bool dropIn = not needDrop or f_isDrop(open[k], close[k])
 
-            if okLegOut and okLegIn and dropIn and f_baseMultiple(n, pct)
+            // if okLegOut and okLegIn and dropIn and f_baseMultiple(n, pct)
+            if okLegOut and okLegIn and dropIn and f_baseMultiple(n, pct) and f_baseBodyOk(n)
                 bool okFvgIn  = f_fvg_legin_dbd(low[k + 1], high[n + 1])
                 bool jarakOk  = f_jarakBaseOk(n, 0.5)
                 bool tanpaFvg = not okFvgIn and not okFvgOut
@@ -479,7 +501,8 @@ f_dbd_single(
     // jarak base: base = 1 candle (C2), dihitung relatif ke bar saat ini
     bool jarakOk = f_jarakBaseOk(1, 0.5)
 
-    bool polaOk   = okLegIn and okLegOut and okCandle2 and dropOK
+    bool baseBodyOk = f_baseBodyOk(1)
+    bool polaOk   = okLegIn and okLegOut and okCandle2 and dropOK and baseBodyOk
     bool tanpaFvg = not okFvgLegIn and not okFvgLegOut
 
     // selain LOW, wajib punya minimal 1 FVG (sama seperti aturan lama)
@@ -586,7 +609,8 @@ f_rbr_single(
     bool rallyOK = not needRally or (f_isBullish(o1, c1) and f_isBullish(o3, c3))
     bool jarakOk = f_jarakBaseOk(1, 0.5)
 
-    bool polaOk   = okLegIn and okLegOut and okCandle2 and rallyOK
+    bool baseBodyOk = f_baseBodyOk(1)
+    bool polaOk   = okLegIn and okLegOut and okCandle2 and rallyOK and baseBodyOk
     bool tanpaFvg = not okFvgLegIn and not okFvgLegOut
     bool valid    = polaOk and (not tanpaFvg or inputSensitifitas == 'LOW')
 
@@ -688,6 +712,13 @@ var array<box>    rBoxes  = array.new<box>()
 var array<label>  rLabels = array.new<label>()
 var array<bool>   rIsMulti = array.new<bool>()
 var array<float>  clsArr  = array.new<float>()   // close
+var array<int> rbrPat      = array.new<int>()   // leg in / base / leg out RBR
+var array<int> rbrBaseFlag = array.new<int>()   // candle base RBR
+var array<int> rbrBaseZone = array.new<int>()   // index zona di rTop/rBot
+while rbrPat.size() <= bar_index
+    rbrPat.push(0)
+    rbrBaseFlag.push(0)
+    rbrBaseZone.push(-1)
 
 // Semua candle base harus lolos cek base RBR (cermin f_baseMultiple)
 f_baseMultipleRbr(int nBase, float pct) =>
@@ -698,8 +729,8 @@ f_baseMultipleRbr(int nBase, float pct) =>
 
         // base tidak boleh turun: low tiap candle tidak lebih rendah dari
         // low candle base sebelumnya (di kirinya)
-        if j < nBase + 1 and low[j] < low[j + 1]
-            ok := false
+        // if j < nBase + 1 and low[j] < low[j + 1]
+        //     ok := false
     ok
     
 // Kode 9: semua ekor bawah base harus >= open leg in
@@ -741,7 +772,8 @@ f_rbr_multiple(int minBase, int maxBase, float pct, bool needRally) =>
             bool okLegIn  = f_legIn_valid_rbr(open[k], high[k], low[k], close[k])
             bool rallyIn  = not needRally or f_isBullish(open[k], close[k])
 
-            if okLegOut and okLegIn and rallyIn and f_baseMultipleRbr(n, pct)
+            // if okLegOut and okLegIn and rallyIn and f_baseMultipleRbr(n, pct)
+            if okLegOut and okLegIn and rallyIn and f_baseMultipleRbr(n, pct) and f_baseBodyOk(n)
                 bool okFvgIn  = f_fvg_legin_rbr(high[k + 1], low[n + 1])
                 bool jarakOk  = f_jarakBaseOk(n, 0.5)
                 bool tanpaFvg = not okFvgIn and not okFvgOut
@@ -802,6 +834,8 @@ f_rbr_multiple(int minBase, int maxBase, float pct, bool needRally) =>
      reqDrop,
      wickPct)
 
+validSingle := validSingle and errSingle <= str.pos("ABCDEFGHIJK", inputMinGrade)   // <-- TARUH DI SINI
+
 markSingle        = validSingle and barstate.isconfirmed and showArrow and showDbdSingle
 markRectangleBase = validSingle and barstate.isconfirmed and showDbdSingle
 
@@ -824,6 +858,8 @@ if markSingle and not backtestMode
      high[2], low[0],                        // FVG Leg Out
      reqDrop,
      wickPct)
+
+validRbr := validRbr and errRbr <= str.pos("ABCDEFGHIJK", inputMinGrade)
 
 markRbr = validRbr and barstate.isconfirmed and showRbrSingle
 
@@ -855,8 +891,12 @@ if markRbr and backtestMode
     rText.push(f_gradeText(errRbr, errCodeRbr))
     rTip.push(f_gradeTipRbr(errRbr, errCodeRbr))
     rIsMulti.push(false)
+    rbrBaseZone.set(bar_index - 2, rTop.size() - 1)
 
 [nRbrMulti, errRbrM, errCodeRbrM] = f_rbr_multiple(MIN_BASE_T5, MAX_BASE_T5, wickPct, reqDrop)
+
+if errRbrM > str.pos("ABCDEFGHIJK", inputMinGrade)   // <-- TARUH DI SINI
+    nRbrMulti := 0
 
 markRbrMulti = nRbrMulti != 0 and barstate.isconfirmed and showRbrMultiple
 
@@ -889,7 +929,24 @@ if markRbrMulti and backtestMode
     rTip.push(f_gradeTipRbr(errRbrM, errCodeRbrM))
     rIsMulti.push(true)
 
+    for d = 2 to nRbrMulti + 1
+        rbrBaseZone.set(bar_index - d, rTop.size() - 1)
+
+if barstate.isconfirmed and bar_index >= 10
+    if validRbr
+        for d = 1 to 3
+            rbrPat.set(bar_index - d, 1)
+        rbrBaseFlag.set(bar_index - 2, 1)
+    if nRbrMulti != 0
+        for d = 1 to nRbrMulti + 2
+            rbrPat.set(bar_index - d, 1)
+        for d = 2 to nRbrMulti + 1
+            rbrBaseFlag.set(bar_index - d, 1)
+
 [nBaseMulti, errMulti, errCodeMulti] = f_dbd_multiple(MIN_BASE_T5, MAX_BASE_T5, wickPct, reqDrop)
+
+if errMulti > str.pos("ABCDEFGHIJK", inputMinGrade)   // <-- TARUH DI SINI
+    nBaseMulti := 0
 
 // Penanda candle yang menjadi bagian pola DBD (leg in / base / leg out)
 // Tidak tergantung toggle showDbdSingle / showDbdMultiple
@@ -1057,28 +1114,26 @@ f_swingBlock(int startOff, int size) =>
     [hi, hiOff, lo, loOff]
 
 
-// Swing High valid: >= 2 candle di kanan dengan body ATAS < body BAWAH candle puncak
 f_validSH(array<float> topA, array<float> botA, int pIdx, int toIdx) =>
     int   cnt = 0
     float ref = botA.get(pIdx)          // body bawah candle puncak
-    for j = pIdx + 1 to toIdx
-        if topA.get(j) < ref            // body atas candle di kanan
-            cnt += 1
-            if cnt >= 2
-                break
+    if pIdx < toIdx
+        for j = pIdx + 1 to toIdx
+            if topA.get(j) < ref        // body atas candle di kanan
+                cnt += 1
+                if cnt >= 2
+                    break
     cnt >= 2
 
-// Swing Low valid: >= 2 candle di kanan dengan body BAWAH > body ATAS candle lembah
-// Swing Low valid: >= 2 candle di kanan yang SELURUH body-nya (open & close)
-// berada di atas close candle lembah
 f_validSL(array<float> topA, array<float> botA, array<float> clsA, int pIdx, int toIdx) =>
     int   cnt = 0
     float ref = clsA.get(pIdx)          // close candle lembah
-    for j = pIdx + 1 to toIdx
-        if botA.get(j) > ref            // body bawah (min open/close) > close lembah
-            cnt += 1
-            if cnt >= 2
-                break
+    if pIdx < toIdx
+        for j = pIdx + 1 to toIdx
+            if botA.get(j) > ref        // body bawah (min open/close) > close lembah
+                cnt += 1
+                if cnt >= 2
+                    break
     cnt >= 2
 
 // =====================================================================
@@ -1099,6 +1154,9 @@ var array<label> swingLabels = array.new<label>()
 var array<line>  zzLines     = array.new<line>()
 var line lastSHLine = na
 var label lastSHLabel = na
+var line  lastSLLine  = na
+var label lastSLLabel = na
+
 
 
 // true = zona INVALID: ekor atas base (levelAtas) sudah tertabrak
@@ -1160,6 +1218,38 @@ f_baseTopAt(int i) =>
             t := math.max(t, hiArr.get(j))
             j += 1
     t
+
+// true = candle i adalah base RBR yang masih aktif
+f_baseAktifRbr(int i) =>
+    bool ok = false
+    if i >= 0 and i < rbrBaseFlag.size()
+        if rbrBaseFlag.get(i) == 1
+            if not backtestMode
+                ok := true
+            else
+                int zid = rbrBaseZone.get(i)
+                if zid >= 0 and zid < rTop.size()
+                    ok := not f_zonaInvalidRbr(rBot.get(zid), rStart.get(zid))
+    ok
+
+// Ekor terbawah dari seluruh candle base pada RBR yang sama
+f_baseBottomAt(int i) =>
+    float b   = loArr.get(i)
+    int   zid = rbrBaseZone.get(i)
+
+    if zid >= 0 and zid < rBot.size()
+        b := rBot.get(zid)
+    else
+        int j = i - 1
+        while j >= 0 and rbrBaseFlag.get(j) == 1
+            b := math.min(b, loArr.get(j))
+            j -= 1
+
+        j := i + 1
+        while j < loArr.size() and rbrBaseFlag.get(j) == 1
+            b := math.min(b, loArr.get(j))
+            j += 1
+    b
 
 while topArr.size() <= bar_index
     topArr.push(0.0)
@@ -1254,6 +1344,14 @@ if barstate.islast
         label.delete(swingLabels.pop())
     while zzLines.size() > 0
         line.delete(zzLines.pop())
+
+    if not na(lastSHLine)
+        line.delete(lastSHLine)
+        lastSHLine := na
+
+    if not na(lastSHLabel)
+        label.delete(lastSHLabel)
+        lastSHLabel := na
 
     if not na(lastSHLine)
         line.delete(lastSHLine)
@@ -1426,6 +1524,91 @@ if barstate.islast
                  style     = label.style_label_down,
                  color     = color.new(lastSHLineCol, 100),
                  textcolor = lastSHLineCol,
+                 size      = size.small)
+
+        // ===== GARIS CONTROL RBR (hijau) =====
+        int   lastSLIdx   = na
+        float lastSLPrice = na
+        for k = swP.size() - 1 to 0
+            if swT.get(k) == -1
+                lastSLIdx   := swIdx.get(k)
+                lastSLPrice := swP.get(k)
+                break
+
+        float greenPrice = lastSLPrice
+        bool  greenValid = false
+        int   hitIdxG    = na
+        int   curRefIdxG = lastSLIdx
+        array<string> skipListG = array.new_string()
+
+        if not na(lastSLIdx) and lastSLIdx > 0
+            int i = lastSLIdx - 1
+            while i >= 0
+                float cTop = hiArr.get(i)
+                float cBot = loArr.get(i)
+
+                if greenPrice >= cBot and greenPrice <= cTop
+                    if f_baseAktifRbr(i)
+                        greenPrice := f_baseBottomAt(i)
+                        greenValid := true
+                        hitIdxG    := i
+                        break
+                    else if rbrPat.get(i) == 1
+                        i -= 1
+                        continue
+                    else
+                        int   nextIdx   = na
+                        float nextPrice = na
+                        for k = swP.size() - 1 to 0
+                            if swT.get(k) == -1 and swIdx.get(k) < i
+                                nextIdx   := swIdx.get(k)
+                                nextPrice := swP.get(k)
+                                break
+
+                        if na(nextIdx)
+                            break
+
+                        skipListG.push(
+                             str.format_time(timeArr.get(curRefIdxG), "dd/MM HH:mm", "GMT+7") +
+                             " @ " + str.tostring(greenPrice, format.mintick))
+
+                        curRefIdxG := nextIdx
+                        greenPrice := nextPrice
+                        i          := nextIdx - 1
+                        continue
+                i -= 1
+
+        if showLastSL and not na(lastSLIdx)
+            lastSLLine := line.new(
+                 x1 = timeArr.get(lastSLIdx), y1 = greenPrice,
+                 x2 = time,                   y2 = greenPrice,
+                 xloc   = xloc.bar_time,
+                 extend = extend.both,
+                 color  = lastSLLineCol,
+                 width  = 2)
+
+            string waktuRbr = greenValid and not na(hitIdxG) ?
+                 "\nRBR: " + str.format_time(timeArr.get(hitIdxG), "dd/MM HH:mm", "GMT+7") :
+                 "\nRBR: tidak ditemukan"
+
+            string txtSkipG = ""
+            int    nSkipG   = skipListG.size()
+            if nSkipG > 0
+                txtSkipG := "\nLembah dilewati (" + str.tostring(nSkipG) + "):"
+                for s = 0 to math.min(nSkipG, 6) - 1
+                    txtSkipG += "\n- " + skipListG.get(s)
+                if nSkipG > 6
+                    txtSkipG += "\n- +" + str.tostring(nSkipG - 6) + " lainnya"
+            else
+                txtSkipG := "\nLembah dilewati: tidak ada"
+
+            lastSLLabel := label.new(
+                 x         = lastSLIdx,
+                 y         = greenPrice,
+                 text      = "Garis Control RBR - " + str.tostring(greenPrice, format.mintick) + waktuRbr + txtSkipG,
+                 style     = label.style_label_up,
+                 color     = color.new(lastSLLineCol, 100),
+                 textcolor = lastSLLineCol,
                  size      = size.small)
 
         // gambar garis + label (pakai waktu, bukan bar_index)
