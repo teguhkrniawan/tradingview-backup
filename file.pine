@@ -50,6 +50,11 @@ inputMinGrade = input.string("C", "Grade minimum yang ditampilkan", options=["A"
 
 inputTinggiBodyBase = input.bool(true, "Tinggi body base vs legin/legout (body base tidak boleh lebih besar)", group="Base")
 
+var box   fibTopBox = na
+var box   fibBotBox = na
+var line  tpLine    = na
+var label tpLabel   = na
+
 if inputSensitifitas == "MEDIUM"
     wickPct := 60
 
@@ -1361,6 +1366,19 @@ if barstate.islast
         label.delete(lastSHLabel)
         lastSHLabel := na
 
+    if not na(fibTopBox)
+        box.delete(fibTopBox)
+        fibTopBox := na
+    if not na(fibBotBox)
+        box.delete(fibBotBox)
+        fibBotBox := na
+    if not na(tpLine)
+        line.delete(tpLine)
+        tpLine := na
+    if not na(tpLabel)
+        label.delete(tpLabel)
+        tpLabel := na
+
     if showSwing and bar_index >= 1
         array<float> swP   = array.new_float()
         array<int>   swIdx = array.new_int()
@@ -1494,11 +1512,13 @@ if barstate.islast
                 i -= 1
 
         if showLastSH and not na(lastSHIdx)
+            int pinkX1 = pinkValid and not na(hitIdx) ? timeArr.get(hitIdx) : timeArr.get(lastSHIdx)
+
             lastSHLine := line.new(
-                 x1 = timeArr.get(lastSHIdx), y1 = pinkPrice,
+                 x1 = pinkX1,                 y1 = pinkPrice,
                  x2 = time,                   y2 = pinkPrice,
                  xloc   = xloc.bar_time,
-                 extend = extend.both,
+                 extend = extend.right,
                  color  = lastSHLineCol,
                  width  = 2)
 
@@ -1579,11 +1599,13 @@ if barstate.islast
                 i -= 1
 
         if showLastSL and not na(lastSLIdx)
+            int greenX1 = greenValid and not na(hitIdxG) ? timeArr.get(hitIdxG) : timeArr.get(lastSLIdx)
+
             lastSLLine := line.new(
-                 x1 = timeArr.get(lastSLIdx), y1 = greenPrice,
+                 x1 = greenX1,                y1 = greenPrice,
                  x2 = time,                   y2 = greenPrice,
                  xloc   = xloc.bar_time,
-                 extend = extend.both,
+                 extend = extend.right,
                  color  = lastSLLineCol,
                  width  = 2)
 
@@ -1610,6 +1632,53 @@ if barstate.islast
                  color     = color.new(lastSLLineCol, 100),
                  textcolor = lastSLLineCol,
                  size      = size.small)
+        
+        // ===== FIBONACCI 25% + TP =====
+        if not na(lastSHIdx) and not na(lastSLIdx) and pinkPrice > greenPrice
+            int pinkLeft  = pinkValid  and not na(hitIdx)  ? timeArr.get(hitIdx)  : timeArr.get(lastSHIdx)
+            int greenLeft = greenValid and not na(hitIdxG) ? timeArr.get(hitIdxG) : timeArr.get(lastSLIdx)
+            int fibLeft   = math.max(pinkLeft, greenLeft)
+
+            float rentang  = pinkPrice - greenPrice
+            float topBatas = pinkPrice  - rentang * 0.25
+            float botBatas = greenPrice + rentang * 0.25
+            float tpPrice  = (pinkPrice + greenPrice) / 2.0
+
+            // zona 25% dari garis pink ke bawah
+            fibTopBox := box.new(
+                 left = fibLeft, top = pinkPrice,
+                 right = time,   bottom = topBatas,
+                 xloc = xloc.bar_time,
+                 extend = extend.right,
+                 border_color = color.new(color.rgb(255, 105, 180), 100),
+                 bgcolor = color.new(color.rgb(255, 105, 180), 80))
+
+            // zona 25% dari garis hijau ke atas
+            fibBotBox := box.new(
+                 left = fibLeft, top = botBatas,
+                 right = time,   bottom = greenPrice,
+                 xloc = xloc.bar_time,
+                 extend = extend.right,
+                 border_color = color.new(color.lime, 100),
+                 bgcolor = color.new(color.lime, 80))
+
+            // garis TP di tengah (50%)
+            tpLine := line.new(
+                 x1 = fibLeft, y1 = tpPrice,
+                 x2 = time,    y2 = tpPrice,
+                 xloc   = xloc.bar_time,
+                 extend = extend.right,
+                 color  = color.gray,
+                 width  = 2)
+
+            tpLabel := label.new(
+                 x = fibLeft, y = tpPrice,
+                 xloc = xloc.bar_time,
+                 text = "TP - " + str.tostring(tpPrice, format.mintick),
+                 style = label.style_label_down,
+                 color = color.new(color.gray, 100),
+                 textcolor = color.gray,
+                 size = size.small)
 
         // gambar garis + label (pakai waktu, bukan bar_index)
         for k = 0 to swP.size() - 1
