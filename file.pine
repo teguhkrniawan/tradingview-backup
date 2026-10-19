@@ -41,6 +41,7 @@ swingBasis = input.string("Ekor", "Swing High/Low diambil dari", options=["Body"
 showDbdSingle   = input.bool(true, "Tampilkan DBD Single", group="Penanda")
 showRbrSingle = input.bool(true, "Tampilkan RBR Single", group="Penanda")
 showDbdMultiple = input.bool(true, "Tampilkan DBD Multiple", group="Penanda")
+showRbrMultiple = input.bool(true, "Tampilkan RBR Multiple", group="Penanda")
 backtestMode = input.bool(true, "Backtest Mode (buang zona yang sudah tersentuh harga)", group="Penanda")
 
 if inputSensitifitas == "MEDIUM"
@@ -140,6 +141,14 @@ f_wickVsBody(float o, float h, float l, float c, float pct, offset) =>
         false
 
 f_wickVsBodySingle(float o, float h, float l, float c, float pct, int offset) =>
+    f_convertPip(f_body(o, c)) < f_convertPip(f_avgBodyInPrice(limitCandleAvg, 'dbd', offset)) or
+     f_convertPip(f_totalWick(o, h, l, c)) >= f_convertPip(f_body(o, c)) or
+     (f_isBullish(o, c) and f_convertPip(f_body(o, c)) > f_convertPip(f_totalWick(o, h, l, c)))
+
+// Candle base RBR (multiple): tidak boleh turun
+// Lolos kalau body kecil (< AVG) atau ekor >= body.
+// Candle bearish dengan body besar TIDAK lolos.
+f_wickVsBodyBaseRbr(float o, float h, float l, float c, float pct, int offset) =>
     f_convertPip(f_body(o, c)) < f_convertPip(f_avgBodyInPrice(limitCandleAvg, 'dbd', offset)) or
      f_convertPip(f_totalWick(o, h, l, c)) >= f_convertPip(f_body(o, c)) or
      (f_isBullish(o, c) and f_convertPip(f_body(o, c)) > f_convertPip(f_totalWick(o, h, l, c)))
@@ -440,6 +449,8 @@ f_gradeTip(int errCount, string errCodes) =>
                 t += "\n[" + c + "] " + f_errDesc(c)
     t
 
+
+
 // =====================================================================
 // FUNGSI POLA DBD SINGLE
 // =====================================================================
@@ -675,6 +686,111 @@ var array<string> rText   = array.new<string>()
 var array<string> rTip    = array.new<string>()
 var array<box>    rBoxes  = array.new<box>()
 var array<label>  rLabels = array.new<label>()
+var array<bool>   rIsMulti = array.new<bool>()
+var array<float>  clsArr  = array.new<float>()   // close
+
+// Semua candle base harus lolos cek base RBR (cermin f_baseMultiple)
+f_baseMultipleRbr(int nBase, float pct) =>
+    bool ok = true
+    for j = 2 to nBase + 1
+        if not f_wickVsBodyBaseRbr(open[j], high[j], low[j], close[j], pct, j)
+            ok := false
+
+        // base tidak boleh turun: low tiap candle tidak lebih rendah dari
+        // low candle base sebelumnya (di kirinya)
+        if j < nBase + 1 and low[j] < low[j + 1]
+            ok := false
+    ok
+    
+// Kode 9: semua ekor bawah base harus >= open leg in
+f_baseBawahRbrOk(int nBase) =>
+    float openLegIn = open[nBase + 2]
+    bool ok = true
+    for j = 2 to nBase + 1
+        if low[j] < openLegIn
+            ok := false
+    ok
+
+// Kode 10: semua ekor atas base harus <= high leg out
+f_baseAtasRbrOk(int nBase) =>
+    float highLegOut = high[1]
+    bool ok = true
+    for j = 2 to nBase + 1
+        if high[j] > highLegOut
+            ok := false
+    ok
+
+// Return: [n base, jumlah error, kode error]  (n base = 0 berarti tidak ditemukan)
+f_rbr_multiple(int minBase, int maxBase, float pct, bool needRally) =>
+    int    nFound   = 0
+    int    errCount = 0
+    string errCodes = ""
+
+    bool rallyOut = not needRally or f_isBullish(open[1], close[1])
+
+    if rallyOut
+        bool okFvgOut = f_fvg_legout_rbr(high[2], low[0])
+
+        for n = minBase to maxBase
+            int k = n + 2
+
+            bool okLegOut = f_legOut_valid_rbr(
+                 open[1], high[1], low[1], close[1],
+                 open[k], close[k])
+
+            bool okLegIn  = f_legIn_valid_rbr(open[k], high[k], low[k], close[k])
+            bool rallyIn  = not needRally or f_isBullish(open[k], close[k])
+
+            if okLegOut and okLegIn and rallyIn and f_baseMultipleRbr(n, pct)
+                bool okFvgIn  = f_fvg_legin_rbr(high[k + 1], low[n + 1])
+                bool jarakOk  = f_jarakBaseOk(n, 0.5)
+                bool tanpaFvg = not okFvgIn and not okFvgOut
+
+                if not tanpaFvg or inputSensitifitas == 'LOW'
+                    nFound := n
+
+                    if tanpaFvg
+                        errCount += 1
+                        errCodes += "3 "
+                    else
+                        if not okFvgIn
+                            errCount += 1
+                            errCodes += "1 "
+                        if not okFvgOut
+                            errCount += 1
+                            errCodes += "2 "
+
+                    if not jarakOk
+                        errCount += 1
+                        errCodes += "4 "
+
+                    if not f_bodyAvgOk(open[k], close[k], k)
+                        errCount += 1
+                        errCodes += "5 "
+
+                    if not f_bodyAvgOk(open[1], close[1], 1)
+                        errCount += 1
+                        errCodes += "6 "
+
+                    if not f_legInBodyOk(open[k], high[k], low[k], close[k])
+                        errCount += 1
+                        errCodes += "7 "
+
+                    if not f_legOutBodyOk(open[1], high[1], low[1], close[1])
+                        errCount += 1
+                        errCodes += "8 "
+
+                    if not f_baseBawahRbrOk(n)
+                        errCount += 1
+                        errCodes += "9 "
+
+                    if not f_baseAtasRbrOk(n)
+                        errCount += 1
+                        errCodes += "10 "
+
+                    break
+
+    [nFound, errCount, str.trim(errCodes)]
 
 
 [validSingle, errSingle, errCodeSingle] = f_dbd_single(
@@ -738,6 +854,40 @@ if markRbr and backtestMode
     rLblX.push(bar_index - 2)
     rText.push(f_gradeText(errRbr, errCodeRbr))
     rTip.push(f_gradeTipRbr(errRbr, errCodeRbr))
+    rIsMulti.push(false)
+
+[nRbrMulti, errRbrM, errCodeRbrM] = f_rbr_multiple(MIN_BASE_T5, MAX_BASE_T5, wickPct, reqDrop)
+
+markRbrMulti = nRbrMulti != 0 and barstate.isconfirmed and showRbrMultiple
+
+// non-backtest: langsung gambar
+if markRbrMulti and not backtestMode
+    box.new(
+         left = bar_index - (nRbrMulti + 1), top = f_baseTop(nRbrMulti),
+         right = bar_index - 2,              bottom = f_baseBottom(nRbrMulti),
+         border_color = color.teal, border_width = 1,
+         bgcolor = color.new(color.teal, 85))
+    if showArrow
+        label.new(
+             bar_index - 2, f_baseBottom(nRbrMulti),
+             f_gradeText(errRbrM, errCodeRbrM),
+             style     = label.style_label_up,
+             color     = color.teal,
+             textcolor = color.white,
+             size      = size.tiny,
+             tooltip   = f_gradeTipRbr(errRbrM, errCodeRbrM))
+
+// backtest: simpan zona
+if markRbrMulti and backtestMode
+    rLeft.push(bar_index - (nRbrMulti + 1))
+    rRight.push(bar_index - 2)
+    rTop.push(f_baseTop(nRbrMulti))
+    rBot.push(f_baseBottom(nRbrMulti))
+    rStart.push(bar_index)
+    rLblX.push(bar_index - 2)
+    rText.push(f_gradeText(errRbrM, errCodeRbrM))
+    rTip.push(f_gradeTipRbr(errRbrM, errCodeRbrM))
+    rIsMulti.push(true)
 
 [nBaseMulti, errMulti, errCodeMulti] = f_dbd_multiple(MIN_BASE_T5, MAX_BASE_T5, wickPct, reqDrop)
 
@@ -919,11 +1069,13 @@ f_validSH(array<float> topA, array<float> botA, int pIdx, int toIdx) =>
     cnt >= 2
 
 // Swing Low valid: >= 2 candle di kanan dengan body BAWAH > body ATAS candle lembah
-f_validSL(array<float> topA, array<float> botA, int pIdx, int toIdx) =>
+// Swing Low valid: >= 2 candle di kanan yang SELURUH body-nya (open & close)
+// berada di atas close candle lembah
+f_validSL(array<float> topA, array<float> botA, array<float> clsA, int pIdx, int toIdx) =>
     int   cnt = 0
-    float ref = topA.get(pIdx)          // body atas candle lembah
+    float ref = clsA.get(pIdx)          // close candle lembah
     for j = pIdx + 1 to toIdx
-        if botA.get(j) > ref            // body bawah candle di kanan
+        if botA.get(j) > ref            // body bawah (min open/close) > close lembah
             cnt += 1
             if cnt >= 2
                 break
@@ -1017,6 +1169,7 @@ while topArr.size() <= bar_index
     shArr.push(0.0)
     slArr.push(0.0)
     timeArr.push(0)
+    clsArr.push(0.0)
 
 topArr.set(bar_index, math.max(open, close))
 botArr.set(bar_index, math.min(open, close))
@@ -1025,6 +1178,7 @@ loArr.set(bar_index, low)
 shArr.set(bar_index, swingBasis == "Body" ? math.max(open, close) : high)
 slArr.set(bar_index, swingBasis == "Body" ? math.min(open, close) : low)
 timeArr.set(bar_index, time)
+clsArr.set(bar_index, close)
 
 // gambar ulang hanya saat data historis selesai dimuat, lalu sekali di awal tiap bar baru
 bool doDraw = barstate.islastconfirmedhistory or (barstate.isrealtime and barstate.isnew)
@@ -1075,20 +1229,23 @@ if doDraw and backtestMode
             if rBoxes.size() >= 100
                 break
             if not f_zonaInvalidRbr(rBot.get(z), rStart.get(z))
+                bool  isMulti = rIsMulti.get(z)
+                color col     = isMulti ? color.teal : color.green
+
                 rBoxes.push(box.new(
                      left = timeArr.get(rLeft.get(z)), top = rTop.get(z),
                      right = timeArr.get(rRight.get(z)), bottom = rBot.get(z),
                      xloc = xloc.bar_time,
-                     border_color = color.green, border_width = 1,
-                     bgcolor = color.new(color.green, 85)))
+                     border_color = col, border_width = 1,
+                     bgcolor = color.new(col, 85)))
                 if showArrow
                     rLabels.push(label.new(
                          x = timeArr.get(rLblX.get(z)), y = rBot.get(z),
                          xloc = xloc.bar_time,
                          text = rText.get(z),
                          style = label.style_label_up,
-                         color = color.green,
-                         textcolor = color.black,
+                         color = col,
+                         textcolor = isMulti ? color.white : color.black,
                          size = size.tiny,
                          tooltip = rTip.get(z)))
 
@@ -1155,7 +1312,7 @@ if barstate.islast
                     if topB > oppP
                         oppP   := topB
                         oppIdx := idx
-                    if oppIdx - extIdx >= swingMinBars and f_validSL(topArr, botArr, extIdx, idx)
+                    if oppIdx - extIdx >= swingMinBars and f_validSL(topArr, botArr, clsArr, extIdx, idx)
                         swP.push(extP)
                         swIdx.push(extIdx)
                         swT.push(-1)
@@ -1172,7 +1329,7 @@ if barstate.islast
 
         // swing terakhir (leg yang masih berjalan)
         // puncak yang belum valid (belum ada 2 candle konfirmasi) tidak digambar
-        bool lastValid = dir == 1 ? f_validSH(topArr, botArr, extIdx, bar_index) : true
+        bool lastValid = dir == 1 ? f_validSH(topArr, botArr, extIdx, bar_index) : f_validSL(topArr, botArr, clsArr, extIdx, bar_index)
 
         if lastValid
             swP.push(extP)
