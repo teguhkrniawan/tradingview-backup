@@ -39,6 +39,7 @@ lastSHLineCol = input.color(color.rgb(255, 105, 180), "Warna garis SH terakhir (
 swingBasis = input.string("Ekor", "Swing High/Low diambil dari", options=["Body", "Ekor"], group="Swing")
 
 showDbdSingle   = input.bool(true, "Tampilkan DBD Single", group="Penanda")
+showRbrSingle = input.bool(true, "Tampilkan RBR Single", group="Penanda")
 showDbdMultiple = input.bool(true, "Tampilkan DBD Multiple", group="Penanda")
 backtestMode = input.bool(true, "Backtest Mode (buang zona yang sudah tersentuh harga)", group="Penanda")
 
@@ -518,6 +519,138 @@ f_dbd_single(
 
     [valid, errCount, str.trim(errCodes)]
 
+// ---------- FVG bullish ----------
+// Leg In : high candle kiri [4] < low candle kanan [2] (base)
+f_fvg_legin_rbr(float highLeftLegIn, float lowRightLegIn) =>
+    highLeftLegIn < (lowRightLegIn + 0.00005)
+
+// Leg Out: high candle kiri [2] (base) < low candle kanan [0]
+f_fvg_legout_rbr(float highLeftLegOut, float lowRightLegOut) =>
+    highLeftLegOut < (lowRightLegOut + 0.00005)
+
+// ---------- Leg In RBR: bullish ----------
+f_legIn_valid_rbr(float o, float h, float l, float c) =>
+    if inputSensitifitas == 'HIGH'
+        f_isBullish(o, c) and f_body(o, c) > f_totalWick(o, h, l, c)
+    else if inputSensitifitas == 'MEDIUM'
+        f_isBullish(o, c) and f_body(o, c) >= f_totalWick(o, h, l, c)
+    else
+        f_isBullish(o, c)      // syarat body vs ekor ada di error code 7
+
+// ---------- Leg Out RBR: bullish, close di atas open & close leg in ----------
+f_legOut_valid_rbr(float o, float h, float l, float c, float openLegIn, float closeLegIn) =>
+    bool posisiOk = c > openLegIn and c > closeLegIn
+    if inputSensitifitas == 'HIGH'
+        f_isBullish(o, c) and f_body(o, c) > f_totalWick(o, h, l, c) and posisiOk
+    else if inputSensitifitas == 'MEDIUM'
+        f_isBullish(o, c) and f_body(o, c) >= f_totalWick(o, h, l, c) and posisiOk
+    else
+        f_isBullish(o, c) and posisiOk
+
+// ---------- Candle base RBR (cermin f_wickVsBodySingle) ----------
+// candle bearish dengan body > ekor dianggap OK (kebalikan dari DBD)
+f_wickVsBodySingleRbr(float o, float h, float l, float c, float pct, int offset) =>
+    f_convertPip(f_body(o, c)) < f_convertPip(f_avgBodyInPrice(limitCandleAvg, 'dbd', offset)) or
+     f_convertPip(f_totalWick(o, h, l, c)) >= f_convertPip(f_body(o, c)) or
+     (f_isDrop(o, c) and f_convertPip(f_body(o, c)) > f_convertPip(f_totalWick(o, h, l, c)))
+
+// ---------- Pola RBR Single ----------
+// Return: [valid, jumlah error, kode error]
+f_rbr_single(
+     float o1, float h1, float l1, float c1,
+     float o2, float h2, float l2, float c2,
+     float o3, float h3, float l3, float c3,
+     float highLeftFvgLegIn,  float lowRightFvgLegIn,
+     float highLeftFvgLegOut, float lowRightFvgLegOut,
+     bool needRally,
+     float wickPctIn) =>
+
+    bool okLegIn   = f_legIn_valid_rbr(o1, h1, l1, c1)
+    bool okCandle2 = f_wickVsBodySingleRbr(o2, h2, l2, c2, wickPctIn, 2)
+    bool okLegOut  = f_legOut_valid_rbr(o3, h3, l3, c3, o1, c1)
+
+    bool okFvgLegIn  = f_fvg_legin_rbr(highLeftFvgLegIn, lowRightFvgLegIn)
+    bool okFvgLegOut = f_fvg_legout_rbr(highLeftFvgLegOut, lowRightFvgLegOut)
+
+    bool rallyOK = not needRally or (f_isBullish(o1, c1) and f_isBullish(o3, c3))
+    bool jarakOk = f_jarakBaseOk(1, 0.5)
+
+    bool polaOk   = okLegIn and okLegOut and okCandle2 and rallyOK
+    bool tanpaFvg = not okFvgLegIn and not okFvgLegOut
+    bool valid    = polaOk and (not tanpaFvg or inputSensitifitas == 'LOW')
+
+    int    errCount = 0
+    string errCodes = ""
+
+    if valid
+        if tanpaFvg
+            errCount += 1
+            errCodes += "3 "
+        else
+            if not okFvgLegIn
+                errCount += 1
+                errCodes += "1 "
+            if not okFvgLegOut
+                errCount += 1
+                errCodes += "2 "
+
+        if not jarakOk
+            errCount += 1
+            errCodes += "4 "
+
+        if not f_bodyAvgOk(o1, c1, 3)
+            errCount += 1
+            errCodes += "5 "
+
+        if not f_bodyAvgOk(o3, c3, 1)
+            errCount += 1
+            errCodes += "6 "
+
+        if not f_legInBodyOk(o1, h1, l1, c1)
+            errCount += 1
+            errCodes += "7 "
+
+        if not f_legOutBodyOk(o3, h3, l3, c3)
+            errCount += 1
+            errCodes += "8 "
+
+        if l2 < o1          // ekor bawah base menembus open leg in (cermin kode 9)
+            errCount += 1
+            errCodes += "9 "
+
+        if h2 > c3          // ekor atas base melewati close leg out (cermin kode 10)
+            errCount += 1
+            errCodes += "10 "
+
+    [valid, errCount, str.trim(errCodes)]
+
+// ---------- Tooltip RBR (deskripsi kode 9 & 10 berbeda) ----------
+f_errDescRbr(string code) =>
+    switch code
+        "1"  => "FVG Leg In tidak valid"
+        "2"  => "FVG Leg Out tidak valid"
+        "3"  => "Tanpa FVG"
+        "4"  => "Jarak base > 50% body leg in/out"
+        "5"  => "Body leg in < AVG body"
+        "6"  => "Body leg out < AVG body"
+        "7"  => "Ekor leg in > body leg in"
+        "8"  => "Ekor leg out > body leg out"
+        "9"  => "Ekor bawah base menembus open leg in"
+        "10" => "Ekor atas base melewati close leg out"
+        => "Kode tidak dikenal"
+
+f_gradeTipRbr(int errCount, string errCodes) =>
+    string t = "RBR Grade " + f_gradeText(errCount, errCodes)
+    if errCount == 0
+        t += "\nTidak ada error"
+    else
+        array<string> codes = str.split(errCodes, " ")
+        for k = 0 to codes.size() - 1
+            string c = codes.get(k)
+            if c != ""
+                t += "\n[" + c + "] " + f_errDescRbr(c)
+    t
+
 var array<int>    zLeft      = array.new<int>()
 var array<int>    zRight     = array.new<int>()
 var array<float>  zTop       = array.new<float>()   // ekor tertinggi base
@@ -531,6 +664,17 @@ var array<bool>   zShowLbl   = array.new<bool>()
 var array<bool>   zShowBox   = array.new<bool>()
 var array<box>    zoneBoxes  = array.new<box>()
 var array<label>  zoneLabels = array.new<label>()
+
+var array<int>    rLeft   = array.new<int>()
+var array<int>    rRight  = array.new<int>()
+var array<float>  rTop    = array.new<float>()
+var array<float>  rBot    = array.new<float>()
+var array<int>    rStart  = array.new<int>()
+var array<int>    rLblX   = array.new<int>()
+var array<string> rText   = array.new<string>()
+var array<string> rTip    = array.new<string>()
+var array<box>    rBoxes  = array.new<box>()
+var array<label>  rLabels = array.new<label>()
 
 
 [validSingle, errSingle, errCodeSingle] = f_dbd_single(
@@ -555,6 +699,45 @@ if markSingle and not backtestMode
          textcolor = color.black,
          size      = size.tiny,
          tooltip   = f_gradeTip(errSingle, errCodeSingle))
+
+[validRbr, errRbr, errCodeRbr] = f_rbr_single(
+     open[3], high[3], low[3], close[3],     // C1
+     open[2], high[2], low[2], close[2],     // C2
+     open[1], high[1], low[1], close[1],     // C3
+     high[4], low[2],                        // FVG Leg In
+     high[2], low[0],                        // FVG Leg Out
+     reqDrop,
+     wickPct)
+
+markRbr = validRbr and barstate.isconfirmed and showRbrSingle
+
+// non-backtest: langsung gambar
+if markRbr and not backtestMode
+    box.new(
+         left = bar_index - 3, top = high[2],
+         right = bar_index - 1, bottom = low[2],
+         border_color = color.green, border_width = 1,
+         bgcolor = color.new(color.green, 85))
+    if showArrow
+        label.new(
+             bar_index - 2, low[2],
+             f_gradeText(errRbr, errCodeRbr),
+             style     = label.style_label_up,
+             color     = color.green,
+             textcolor = color.black,
+             size      = size.tiny,
+             tooltip   = f_gradeTipRbr(errRbr, errCodeRbr))
+
+// backtest: simpan zona
+if markRbr and backtestMode
+    rLeft.push(bar_index - 3)
+    rRight.push(bar_index - 1)
+    rTop.push(high[2])
+    rBot.push(low[2])
+    rStart.push(bar_index)
+    rLblX.push(bar_index - 2)
+    rText.push(f_gradeText(errRbr, errCodeRbr))
+    rTip.push(f_gradeTipRbr(errRbr, errCodeRbr))
 
 [nBaseMulti, errMulti, errCodeMulti] = f_dbd_multiple(MIN_BASE_T5, MAX_BASE_T5, wickPct, reqDrop)
 
@@ -781,6 +964,16 @@ f_zonaInvalid(float levelAtas, float levelBawah, int startIdx) =>
             break
     kenaHigh
 
+// true = zona RBR INVALID: ekor bawah base (levelBawah) tertabrak body di kanan
+f_zonaInvalidRbr(float levelBawah, int startIdx) =>
+    bool kena   = false
+    int  endIdx = barstate.isconfirmed ? bar_index : bar_index - 1
+    for i = startIdx to endIdx
+        if levelBawah >= botArr.get(i) and levelBawah <= topArr.get(i)
+            kena := true
+            break
+    kena
+
 // true = candle i adalah base yang boleh ditabrak garis pink
 // Backtest Mode aktif: zona base itu juga harus belum tersentuh harga
 f_baseAktif(int i) =>
@@ -870,6 +1063,34 @@ if doDraw and backtestMode
                          textcolor = color.black,
                          size = size.tiny,
                          tooltip = zTip.get(z)))
+
+if doDraw and backtestMode
+    while rBoxes.size() > 0
+        box.delete(rBoxes.pop())
+    while rLabels.size() > 0
+        label.delete(rLabels.pop())
+
+    if rTop.size() > 0
+        for z = rTop.size() - 1 to 0
+            if rBoxes.size() >= 100
+                break
+            if not f_zonaInvalidRbr(rBot.get(z), rStart.get(z))
+                rBoxes.push(box.new(
+                     left = timeArr.get(rLeft.get(z)), top = rTop.get(z),
+                     right = timeArr.get(rRight.get(z)), bottom = rBot.get(z),
+                     xloc = xloc.bar_time,
+                     border_color = color.green, border_width = 1,
+                     bgcolor = color.new(color.green, 85)))
+                if showArrow
+                    rLabels.push(label.new(
+                         x = timeArr.get(rLblX.get(z)), y = rBot.get(z),
+                         xloc = xloc.bar_time,
+                         text = rText.get(z),
+                         style = label.style_label_up,
+                         color = color.green,
+                         textcolor = color.black,
+                         size = size.tiny,
+                         tooltip = rTip.get(z)))
 
 if barstate.islast
     while swingLabels.size() > 0
