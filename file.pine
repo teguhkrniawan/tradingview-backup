@@ -1,5 +1,5 @@
 //@version=5
-indicator("Indicator Versi Teguh", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=200)
+indicator("7Seas_PAC", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=200)
 
 // =====================================================================
 //  INPUT
@@ -405,11 +405,39 @@ f_dbd_multiple(int minBase, int maxBase, float pct, bool needDrop) =>
 
     [nFound, errCount, str.trim(errCodes)]
 
-// 0 error = A, 1 = B, 2 = C, dst (maksimal Z)
+// Deskripsi tiap kode error
+f_errDesc(string code) =>
+    switch code
+        "1"  => "FVG Leg In tidak valid"
+        "2"  => "FVG Leg Out tidak valid"
+        "3"  => "Tanpa FVG"
+        "4"  => "Jarak base > 50% body leg in/out"
+        "5"  => "Body leg in < AVG body"
+        "6"  => "Body leg out < AVG body"
+        "7"  => "Ekor leg in > body leg in"
+        "8"  => "Ekor leg out > body leg out"
+        "9"  => "Ekor atas base menembus open leg in"
+        "10" => "Ekor bawah base turun di bawah low leg out"
+        => "Kode tidak dikenal"
+
+// Label hanya huruf grade (A, B, C, ...)
 f_gradeText(int errCount, string errCodes) =>
     int idx = math.min(errCount, 25)
-    string g = str.substring("ABCDEFGHIJKLMNOPQRSTUVWXYZ", idx, idx + 1)
-    g + (errCount > 0 ? " [" + str.replace_all(errCodes, " ", ",") + "]" : "")
+    str.substring("ABCDEFGHIJKLMNOPQRSTUVWXYZ", idx, idx + 1)
+
+// Isi tooltip: grade + daftar error beserta penjelasannya
+f_gradeTip(int errCount, string errCodes) =>
+    string g = f_gradeText(errCount, errCodes)
+    string t = "Grade " + g
+    if errCount == 0
+        t += "\nTidak ada error"
+    else
+        array<string> codes = str.split(errCodes, " ")
+        for k = 0 to codes.size() - 1
+            string c = codes.get(k)
+            if c != ""
+                t += "\n[" + c + "] " + f_errDesc(c)
+    t
 
 // =====================================================================
 // FUNGSI POLA DBD SINGLE
@@ -497,6 +525,7 @@ var array<float>  zBot       = array.new<float>()   // ekor terendah base
 var array<int>    zStart     = array.new<int>()     // scan ke kanan mulai dari bar ini
 var array<int>    zLblX      = array.new<int>()
 var array<string> zText      = array.new<string>()
+var array<string> zTip       = array.new<string>()
 var array<bool>   zIsSingle  = array.new<bool>()
 var array<bool>   zShowLbl   = array.new<bool>()
 var array<bool>   zShowBox   = array.new<bool>()
@@ -524,7 +553,8 @@ if markSingle and not backtestMode
          style     = label.style_label_down,
          color     = markerColor,
          textcolor = color.black,
-         size      = size.tiny)
+         size      = size.tiny,
+         tooltip   = f_gradeTip(errSingle, errCodeSingle))
 
 [nBaseMulti, errMulti, errCodeMulti] = f_dbd_multiple(MIN_BASE_T5, MAX_BASE_T5, wickPct, reqDrop)
 
@@ -571,6 +601,7 @@ if backtestMode and markRectangleBase
     zStart.push(bar_index)
     zLblX.push(bar_index - 2)
     zText.push(f_gradeText(errSingle, errCodeSingle))
+    zTip.push(f_gradeTip(errSingle, errCodeSingle))
     zIsSingle.push(true)
     zShowLbl.push(showArrow)
     zShowBox.push(showDbdSingle)
@@ -585,6 +616,7 @@ if backtestMode and nBaseMulti != 0 and barstate.isconfirmed and showDbdMultiple
     zStart.push(bar_index)
     zLblX.push(bar_index - 2)
     zText.push(txtMulti)
+    zTip.push(f_gradeTip(errMulti, errCodeMulti))
     zIsSingle.push(false)
     zShowLbl.push(showArrow)
     zShowBox.push(showDbdMultiple)
@@ -609,8 +641,8 @@ if markMulti and not backtestMode
          style     = label.style_label_down,
          color     = color.orange,
          textcolor = color.black,
-         size      = size.tiny)
-
+         size      = size.tiny,
+         tooltip   = f_gradeTip(errMulti, errCodeMulti))
 
 // =====================================================================
 // KOTAK CANDLE 2
@@ -767,6 +799,27 @@ f_baseAktif(int i) =>
                     ok := not f_zonaInvalid(zTop.get(zid), zBot.get(zid), zStart.get(zid))
     ok
 
+// Ekor tertinggi dari seluruh candle base pada DBD yang sama
+// Prioritas: pakai zTop (sudah berisi high tertinggi base, Single maupun Multiple)
+// Fallback (non-backtest, zona tidak disimpan): telusuri candle base yang berdempetan
+f_baseTopAt(int i) =>
+    float t   = hiArr.get(i)
+    int   zid = baseZone.get(i)
+
+    if zid >= 0 and zid < zTop.size()
+        t := zTop.get(zid)
+    else
+        int j = i - 1
+        while j >= 0 and baseFlag.get(j) == 1
+            t := math.max(t, hiArr.get(j))
+            j -= 1
+
+        j := i + 1
+        while j < hiArr.size() and baseFlag.get(j) == 1
+            t := math.max(t, hiArr.get(j))
+            j += 1
+    t
+
 while topArr.size() <= bar_index
     topArr.push(0.0)
     botArr.push(0.0)
@@ -794,30 +847,33 @@ if doDraw and backtestMode
         label.delete(zoneLabels.pop())
 
     // dari terbaru ke lama, berhenti di 450 supaya aman dari limit 500
-    for z = zTop.size() - 1 to 0
-        if zoneBoxes.size() >= 450
-            break
+    if zTop.size() > 0
+        for z = zTop.size() - 1 to 0
+            if zoneBoxes.size() >= 450
+                break
 
-        if not f_zonaInvalid(zTop.get(z), zBot.get(z), zStart.get(z))
-            bool  isSingle = zIsSingle.get(z)
-            color col      = isSingle ? color.blue : color.orange
+            if not f_zonaInvalid(zTop.get(z), zBot.get(z), zStart.get(z))
+                bool  isSingle = zIsSingle.get(z)
+                color col      = isSingle ? color.blue : color.orange
 
-            zoneBoxes.push(box.new(
-                 left = timeArr.get(zLeft.get(z)), top = zTop.get(z),
-                 right = timeArr.get(zRight.get(z)), bottom = zBot.get(z),
-                 xloc = xloc.bar_time,
-                 border_color = col, border_width = 1,
-                 bgcolor = color.new(col, 85)))
+                if zShowBox.get(z)
+                    zoneBoxes.push(box.new(
+                         left = timeArr.get(zLeft.get(z)), top = zTop.get(z),
+                         right = timeArr.get(zRight.get(z)), bottom = zBot.get(z),
+                         xloc = xloc.bar_time,
+                         border_color = col, border_width = 1,
+                         bgcolor = color.new(col, 85)))
 
-            if zShowLbl.get(z)
-                zoneLabels.push(label.new(
-                     x = timeArr.get(zLblX.get(z)), y = zTop.get(z),
-                     xloc = xloc.bar_time,
-                     text = zText.get(z),
-                     style = label.style_label_down,
-                     color = isSingle ? markerColor : color.orange,
-                     textcolor = color.black,
-                     size = size.tiny))
+                if zShowLbl.get(z)
+                    zoneLabels.push(label.new(
+                         x = timeArr.get(zLblX.get(z)), y = zTop.get(z),
+                         xloc = xloc.bar_time,
+                         text = zText.get(z),
+                         style = label.style_label_down,
+                         color = isSingle ? markerColor : color.orange,
+                         textcolor = color.black,
+                         size = size.tiny,
+                         tooltip = zTip.get(z)))
 
 if barstate.islast
     while swingLabels.size() > 0
@@ -898,9 +954,13 @@ if barstate.islast
             
 
         // swing terakhir (leg yang masih berjalan)
-        swP.push(extP)
-        swIdx.push(extIdx)
-        swT.push(dir)
+        // puncak yang belum valid (belum ada 2 candle konfirmasi) tidak digambar
+        bool lastValid = dir == 1 ? f_validSH(topArr, botArr, extIdx, bar_index) : true
+
+        if lastValid
+            swP.push(extP)
+            swIdx.push(extIdx)
+            swT.push(dir)
 
         // cari swing high terakhir (dari belakang)
         int   lastSHIdx   = na
@@ -929,7 +989,7 @@ if barstate.islast
 
                 if pinkPrice >= cBot and pinkPrice <= cTop
                     if f_baseAktif(i)
-                        pinkPrice := cTop
+                        pinkPrice := f_baseTopAt(i)
                         pinkValid := true
                         hitIdx    := i
                         break
