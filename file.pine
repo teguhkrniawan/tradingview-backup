@@ -46,7 +46,7 @@ showDbdMultiple = input.bool(true, "Tampilkan DBD Multiple", group="Penanda")
 showRbrMultiple = input.bool(true, "Tampilkan RBR Multiple", group="Penanda")
 backtestMode = input.bool(true, "Backtest Mode (buang zona yang sudah tersentuh harga)", group="Penanda")
 
-inputMinGrade = input.string("C", "Grade minimum yang ditampilkan", options=["A","B","C","D","E","F","G","H","I","J","K"], group="Sensitifitas", tooltip="Pilih C: tampil C, B, A. Pilih B: tampil B, A. K = tampilkan semua.")
+inputMinGrade = input.string("K", "Grade minimum yang ditampilkan", options=["A","B","C","D","E","F","G","H","I","J","K"], group="Sensitifitas", tooltip="Pilih C: tampil C, B, A. Pilih B: tampil B, A. K = tampilkan semua.")
 
 inputTinggiBodyBase = input.bool(true, "Tinggi body base vs legin/legout (body base tidak boleh lebih besar)", group="Base")
 
@@ -705,6 +705,11 @@ var array<bool>   zShowBox   = array.new<bool>()
 var array<box>    zoneBoxes  = array.new<box>()
 var array<label>  zoneLabels = array.new<label>()
 
+var array<bool> zDead   = array.new<bool>()
+var array<int>  zActive = array.new<int>()
+var array<bool> rDead   = array.new<bool>()
+var array<int>  rActive = array.new<int>()
+
 var array<int>    rLeft   = array.new<int>()
 var array<int>    rRight  = array.new<int>()
 var array<float>  rTop    = array.new<float>()
@@ -1200,7 +1205,8 @@ f_baseAktif(int i) =>
             else
                 int zid = baseZone.get(i)
                 if zid >= 0 and zid < zTop.size()
-                    ok := not f_zonaInvalid(zTop.get(zid), zBot.get(zid), zStart.get(zid))
+                    // ok := not f_zonaInvalid(zTop.get(zid), zBot.get(zid), zStart.get(zid))
+                    ok := not zDead.get(zid)
     ok
 
 // Ekor tertinggi dari seluruh candle base pada DBD yang sama
@@ -1234,7 +1240,8 @@ f_baseAktifRbr(int i) =>
             else
                 int zid = rbrBaseZone.get(i)
                 if zid >= 0 and zid < rTop.size()
-                    ok := not f_zonaInvalidRbr(rBot.get(zid), rStart.get(zid))
+                    // ok := not f_zonaInvalidRbr(rBot.get(zid), rStart.get(zid))
+                    ok := not rDead.get(zid)
     ok
 
 // Ekor terbawah dari seluruh candle base pada RBR yang sama
@@ -1274,6 +1281,35 @@ shArr.set(bar_index, swingBasis == "Body" ? math.max(open, close) : high)
 slArr.set(bar_index, swingBasis == "Body" ? math.min(open, close) : low)
 timeArr.set(bar_index, time)
 clsArr.set(bar_index, close)
+
+// daftarkan zona baru
+while zDead.size() < zTop.size()
+    zActive.push(zDead.size())
+    zDead.push(false)
+while rDead.size() < rTop.size()
+    rActive.push(rDead.size())
+    rDead.push(false)
+
+float curTop = math.max(open, close)
+float curBot = math.min(open, close)
+
+// DBD: ekor atas base tertabrak body bar ini?
+if zActive.size() > 0
+    for a = zActive.size() - 1 to 0
+        int z = zActive.get(a)
+        float lvl = zTop.get(z)
+        if lvl >= curBot and lvl <= curTop
+            zDead.set(z, true)
+            zActive.remove(a)
+
+// RBR: ekor bawah base tertabrak body bar ini?
+if rActive.size() > 0
+    for a = rActive.size() - 1 to 0
+        int z = rActive.get(a)
+        float lvl = rBot.get(z)
+        if lvl >= curBot and lvl <= curTop
+            rDead.set(z, true)
+            rActive.remove(a)
 
 // gambar ulang hanya saat data historis selesai dimuat, lalu sekali di awal tiap bar baru
 bool doDraw = barstate.islastconfirmedhistory or (barstate.isrealtime and barstate.isnew)
@@ -1380,6 +1416,7 @@ if barstate.islast
         tpLabel := na
 
     if showSwing and bar_index >= 1
+        
         array<float> swP   = array.new_float()
         array<int>   swIdx = array.new_int()
         array<int>   swT   = array.new_int() 
@@ -1520,6 +1557,7 @@ if barstate.islast
                  xloc   = xloc.bar_time,
                  extend = extend.right,
                  color  = lastSHLineCol,
+                 style  = pinkValid ? line.style_solid : line.style_dashed,
                  width  = 2)
 
             string waktuDbd = pinkValid and not na(hitIdx) ?
@@ -1564,23 +1602,34 @@ if barstate.islast
         if not na(lastSLIdx) and lastSLIdx > 0
             int i = lastSLIdx - 1
             while i >= 0
-                float cTop = hiArr.get(i)
-                float cBot = loArr.get(i)
+                float wTop = hiArr.get(i)      // ekor atas
+                float wBot = loArr.get(i)      // ekor bawah
+                float bTop = topArr.get(i)     // puncak body
+                float bBot = botArr.get(i)     // dasar body
 
-                if greenPrice >= cBot and greenPrice <= cTop
-                    if f_baseAktifRbr(i)
-                        greenPrice := f_baseBottomAt(i)
-                        greenValid := true
-                        hitIdxG    := i
-                        break
-                    else if rbrPat.get(i) == 1
+                // 1) Candle adalah base RBR aktif: ekor atas/bawah boleh menabrak
+                if f_baseAktifRbr(i) and greenPrice >= wBot and greenPrice <= wTop
+                    greenPrice := f_baseBottomAt(i)
+                    greenValid := true
+                    hitIdxG    := i
+                    break
+
+                // 2) Selain base aktif, hanya BODY yang dianggap tabrakan
+                if greenPrice >= bBot and greenPrice <= bTop
+                    if rbrPat.get(i) == 1
+                        // bagian pola RBR (leg in / leg out / base yang sudah mati):
+                        // lewati, cek candle di kirinya dengan harga yang sama
+                        if rbrBaseFlag.get(i) == 1
+                            skipListG.push("base mati @ " + str.format_time(timeArr.get(i), "dd/MM HH:mm", "GMT+7"))
                         i -= 1
                         continue
                     else
+                        // bukan base: pindah ke lembah (swing low) yang LEBIH RENDAH
+                        // dari harga acuan saat ini, dan berada di kiri candle ini
                         int   nextIdx   = na
                         float nextPrice = na
                         for k = swP.size() - 1 to 0
-                            if swT.get(k) == -1 and swIdx.get(k) < i
+                            if swT.get(k) == -1 and swIdx.get(k) < i and swP.get(k) < greenPrice
                                 nextIdx   := swIdx.get(k)
                                 nextPrice := swP.get(k)
                                 break
@@ -1607,6 +1656,7 @@ if barstate.islast
                  xloc   = xloc.bar_time,
                  extend = extend.right,
                  color  = lastSLLineCol,
+                 style  = greenValid ? line.style_solid : line.style_dashed,
                  width  = 2)
 
             string waktuRbr = greenValid and not na(hitIdxG) ?
