@@ -766,24 +766,20 @@ var line lastSHLine = na
 var label lastSHLabel = na
 
 
-// true = zona INVALID: high base DAN low base sama-sama sudah tersentuh
-// oleh body candle di kanan (boleh candle yang berbeda)
+// true = zona INVALID: ekor atas base (levelAtas) sudah tertabrak
+// oleh body candle mana pun di kanan. Selama belum tertabrak, zona tetap valid.
+// levelBawah tidak dipakai lagi, tetap ada di parameter supaya pemanggil tidak perlu diubah.
 f_zonaInvalid(float levelAtas, float levelBawah, int startIdx) =>
     bool kenaHigh = false
-    bool kenaLow  = false
     int  endIdx   = barstate.isconfirmed ? bar_index : bar_index - 1
     for i = startIdx to endIdx
         float bTop = topArr.get(i)
         float bBot = botArr.get(i)
 
-        if not kenaHigh and levelAtas >= bBot and levelAtas <= bTop
+        if levelAtas >= bBot and levelAtas <= bTop
             kenaHigh := true
-        if not kenaLow and levelBawah >= bBot and levelBawah <= bTop
-            kenaLow := true
-
-        if kenaHigh and kenaLow
             break
-    kenaHigh and kenaLow
+    kenaHigh
 
 // true = candle i adalah base yang boleh ditabrak garis pink
 // Backtest Mode aktif: zona base itu juga harus belum tersentuh harga
