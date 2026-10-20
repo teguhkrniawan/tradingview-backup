@@ -48,8 +48,11 @@ showRbrMultiple = input.bool(true, "Tampilkan RBR Multiple", group="Penanda")
 backtestMode = input.bool(true, "Backtest Mode (buang zona yang sudah tersentuh harga)", group="Penanda")
 
 inputMinGrade = input.string("K", "Grade minimum yang ditampilkan", options=["A","B","C","D","E","F","G","H","I","J","K"], group="Sensitifitas", tooltip="Pilih C: tampil C, B, A. Pilih B: tampil B, A. K = tampilkan semua.")
-
 inputTinggiBodyBase = input.bool(true, "Tinggi body base vs legin/legout (body base tidak boleh lebih besar)", group="Base")
+
+// group Fibonacci
+fibTopCol = input.color(color.rgb(255, 105, 180), "Warna zona atas (dari garis Control SH)", group="Fibonacci")
+fibBotCol = input.color(color.lime, "Warna zona bawah (dari garis Control RBR)", group="Fibonacci")
 
 var box   fibTopBox = na
 var box   fibBotBox = na
@@ -1701,8 +1704,8 @@ if barstate.islast
                  right = time,   bottom = topBatas,
                  xloc = xloc.bar_time,
                  extend = extend.right,
-                 border_color = color.new(color.rgb(255, 105, 180), 100),
-                 bgcolor = color.new(color.rgb(255, 105, 180), 80))
+                 border_color = color.new(fibTopCol, 100),
+                 bgcolor = color.new(fibTopCol, 80))
 
             // zona 25% dari garis hijau ke atas
             fibBotBox := box.new(
@@ -1710,8 +1713,8 @@ if barstate.islast
                  right = time,   bottom = greenPrice,
                  xloc = xloc.bar_time,
                  extend = extend.right,
-                 border_color = color.new(color.lime, 100),
-                 bgcolor = color.new(color.lime, 80))
+                 border_color = color.new(fibBotCol, 100),
+                 bgcolor = color.new(fibBotCol, 80))
 
             // garis TP di tengah (50%)
             tpLine := line.new(
