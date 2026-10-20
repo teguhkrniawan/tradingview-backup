@@ -23,6 +23,7 @@ inputSensitifitas = input.string(
      group = "Sensitifitas")
 
 showDebugLegin = input.bool(false, "DEBUG", group="Debug")
+devMode = input.bool(false, "DEV MODE", group="Debug", tooltip="Centang: error kode 4 (jarak base > 50% body leg in/out) TIDAK mandatory, hanya jadi pengurang grade.\nUncheck: error kode 4 MANDATORY, pola dibuang kalau jarak base melebihi 50%.")
 
 jmlLabel       = input.int(100, "Jumlah label debug", minval=1, maxval=400, group="Debug")
 geserKiri      = input.int(0, "Geser ke kiri (jumlah bar)", minval=0, group="Debug")
@@ -394,7 +395,7 @@ f_dbd_multiple(int minBase, int maxBase, float pct, bool needDrop) =>
             bool dropIn = not needDrop or f_isDrop(open[k], close[k])
 
             // if okLegOut and okLegIn and dropIn and f_baseMultiple(n, pct)
-            if okLegOut and okLegIn and dropIn and f_baseMultiple(n, pct) and f_baseBodyOk(n)
+            if okLegOut and okLegIn and dropIn and f_baseMultiple(n, pct) and f_baseBodyOk(n) and (devMode or f_jarakBaseOk(n, 0.5))
                 bool okFvgIn  = f_fvg_legin_dbd(low[k + 1], high[n + 1])
                 bool jarakOk  = f_jarakBaseOk(n, 0.5)
                 bool tanpaFvg = not okFvgIn and not okFvgOut
@@ -511,7 +512,7 @@ f_dbd_single(
     bool jarakOk = f_jarakBaseOk(1, 0.5)
 
     bool baseBodyOk = f_baseBodyOk(1)
-    bool polaOk   = okLegIn and okLegOut and okCandle2 and dropOK and baseBodyOk
+    bool polaOk   = okLegIn and okLegOut and okCandle2 and dropOK and baseBodyOk and (devMode or jarakOk)
     bool tanpaFvg = not okFvgLegIn and not okFvgLegOut
 
     // selain LOW, wajib punya minimal 1 FVG (sama seperti aturan lama)
@@ -620,7 +621,7 @@ f_rbr_single(
     bool jarakOk = f_jarakBaseOk(1, 0.5)
 
     bool baseBodyOk = f_baseBodyOk(1)
-    bool polaOk   = okLegIn and okLegOut and okCandle2 and rallyOK and baseBodyOk
+    bool polaOk   = okLegIn and okLegOut and okCandle2 and rallyOK and baseBodyOk and (devMode or jarakOk)
     bool tanpaFvg = not okFvgLegIn and not okFvgLegOut
     bool valid    = polaOk and (not tanpaFvg or inputSensitifitas == 'LOW')
 
@@ -788,7 +789,7 @@ f_rbr_multiple(int minBase, int maxBase, float pct, bool needRally) =>
             bool rallyIn  = not needRally or f_isBullish(open[k], close[k])
 
             // if okLegOut and okLegIn and rallyIn and f_baseMultipleRbr(n, pct)
-            if okLegOut and okLegIn and rallyIn and f_baseMultipleRbr(n, pct) and f_baseBodyOk(n)
+            if okLegOut and okLegIn and rallyIn and f_baseMultipleRbr(n, pct) and f_baseBodyOk(n) and (devMode or f_jarakBaseOk(n, 0.5))
                 bool okFvgIn  = f_fvg_legin_rbr(high[k + 1], low[n + 1])
                 bool jarakOk  = f_jarakBaseOk(n, 0.5)
                 bool tanpaFvg = not okFvgIn and not okFvgOut
