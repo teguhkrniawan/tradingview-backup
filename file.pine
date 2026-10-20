@@ -4,13 +4,13 @@ indicator("7Seas_PAC", overlay=true, max_labels_count=500, max_lines_count=500, 
 // =====================================================================
 //  INPUT
 // =====================================================================
-inputToleransiAvg = input.float(100.0, "Toleransi Body AVG (brp % dari AVG Body)", minval=0.0, step=1.0, group="Candle 1 & 3")
+inputToleransiAvg = 100
 
 wickPct = 50
-reqDrop = input.bool(true, "Candle 1 & 3 Drop", group="Candle 1 & 3")
+reqDrop = true
 
 // Group Penanda
-markerColor = input.color(color.yellow, "Warna panah & teks", group="Penanda")
+markerColor = color.yellow
 showArrow = input.bool(true, "Tampilkan Panah", group="Penanda")
 
 // group AVG Body
@@ -30,15 +30,16 @@ geserKiri      = input.int(0, "Geser ke kiri (jumlah bar)", minval=0, group="Deb
 // group Swing
 showSwing     = input.bool(true, "Tampilkan Zigzag Swing", group="Swing")
 // swingLookback = input.int(200, "Lookback (jumlah candle)", minval=20, group="Swing")
-swingMinBars  = input.int(3, "Jarak minimal antar swing (candle)", minval=1, group="Swing")
-swingHighCol  = input.color(color.red, "Warna Swing High", group="Swing")
-swingLowCol   = input.color(color.lime, "Warna Swing Low", group="Swing")
-zzLineCol     = input.color(color.white, "Warna garis zigzag", group="Swing")
+swingMinBars  = 3
+swingHighCol  = color.red
+swingLowCol   = color.lime
+zzLineCol     = color.white
+lastSHLineCol = color.rgb(255, 105, 180)
+lastSLLineCol = color.lime
+
 showLastSH   = input.bool(true, "Garis horizontal Swing High terakhir", group="Swing")
-lastSHLineCol = input.color(color.rgb(255, 105, 180), "Warna garis SH terakhir (pink)", group="Swing")
-swingBasis = input.string("Ekor", "Swing High/Low diambil dari", options=["Body", "Ekor"], group="Swing")
 showLastSL    = input.bool(true, "Garis horizontal Swing Low terakhir (RBR)", group="Swing")
-lastSLLineCol = input.color(color.lime, "Warna garis SL terakhir (hijau)", group="Swing")
+swingBasis = input.string("Ekor", "Swing High/Low diambil dari", options=["Body", "Ekor"], group="Swing")
 
 showDbdSingle   = input.bool(true, "Tampilkan DBD Single", group="Penanda")
 showRbrSingle = input.bool(true, "Tampilkan RBR Single", group="Penanda")
