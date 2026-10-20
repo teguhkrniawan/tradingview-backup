@@ -1508,49 +1508,91 @@ if barstate.islast
         float pinkPrice = lastSHPrice
         bool  pinkValid = false
         int   hitIdx    = na
-        int   curRefIdx = lastSHIdx          // SH yang sedang jadi acuan
-        array<string> skipList  = array.new_string() // SH yang dilewati
+        int   curRefIdx = lastSHIdx
+        float curRefPriceP = lastSHPrice
+        bool  stopP     = false
+        bool  viaLegIn  = false
+        int   legInIdx  = na
+        array<string> skipList = array.new_string()   // riwayat puncak acuan
 
         if not na(lastSHIdx) and lastSHIdx > 0
             int i = lastSHIdx - 1
             while i >= 0
-                // selalu pakai ekor (high/low) untuk cek tabrakan
-                float cTop = hiArr.get(i)
-                float cBot = loArr.get(i)
+                // range ekor (low..high) sudah mencakup body
+                if pinkPrice >= loArr.get(i) and pinkPrice <= hiArr.get(i)
 
-                if pinkPrice >= cBot and pinkPrice <= cTop
+                    // leg in DBD = bagian pola, bukan base, dan candle kanannya adalah base
+                    bool isLegIn  = patFlag.get(i) == 1 and baseFlag.get(i) == 0 and i + 1 < baseFlag.size() and baseFlag.get(i + 1) == 1
+                    // candle tepat di kiri leg in adalah base DBD yang masih aktif
+                    bool kiriBase = i >= 1 and f_baseAktif(i - 1)
+
                     if f_baseAktif(i)
+                        // skenario 1: kena base DBD aktif
                         pinkPrice := f_baseTopAt(i)
                         pinkValid := true
                         hitIdx    := i
                         break
-                    else if patFlag.get(i) == 1
-                        // leg in / leg out / base yang sudah invalid: bagian dari DBD,
-                        // jangan loncat, cek candle di kirinya dengan harga yang sama
-                        i -= 1
-                        continue
+                    else if isLegIn and kiriBase
+                        // skenario 2: kena leg in DBD, dan candle di kirinya adalah base
+                        pinkPrice := f_baseTopAt(i - 1)
+                        pinkValid := true
+                        hitIdx    := i - 1
+                        viaLegIn  := true
+                        legInIdx  := i
+                        break
                     else
-                        // candle biasa -> loncat ke SH di kirinya (kode lama tetap)
+                        // alasan singkat kenapa puncak ini dilewati
+                        string alasanP = ""
+                        if baseFlag.get(i) == 1
+                            alasanP := "kena base DBD yang sudah mati"
+                        else if isLegIn
+                            alasanP := "kena leg in DBD, tapi candle kirinya bukan base aktif"
+                        else if patFlag.get(i) == 1
+                            alasanP := "kena leg out DBD, bukan base"
+                        else
+                            alasanP := "kena candle biasa, bukan base"
+
+                        string wktHitP = str.format_time(timeArr.get(i), "dd/MM HH:mm", "GMT+7")
+                        string wktRefP = str.format_time(timeArr.get(curRefIdx), "dd/MM HH:mm", "GMT+7")
+
+                        // cari gunung terdekat di kiri puncak acuan saat ini yang LEBIH TINGGI
                         int   nextIdx   = na
                         float nextPrice = na
                         for k = swP.size() - 1 to 0
-                            if swT.get(k) == 1 and swIdx.get(k) < i
+                            if swT.get(k) == 1 and swIdx.get(k) < curRefIdx and swP.get(k) > pinkPrice
                                 nextIdx   := swIdx.get(k)
                                 nextPrice := swP.get(k)
                                 break
 
                         if na(nextIdx)
+                            skipList.push(wktRefP + " @ " + str.tostring(curRefPriceP, format.mintick) +
+                                 " -> SKIP: " + alasanP + " (" + wktHitP + "), tidak ada puncak lebih tinggi, berhenti")
+                            stopP := true
                             break
 
-                        skipList.push(
-                             str.format_time(timeArr.get(curRefIdx), "dd/MM HH:mm", "GMT+7") +
-                             " @ " + str.tostring(pinkPrice, format.mintick))
+                        skipList.push(wktRefP + " @ " + str.tostring(curRefPriceP, format.mintick) +
+                             " -> SKIP: " + alasanP + " (" + wktHitP + ")")
 
-                        curRefIdx := nextIdx
-                        pinkPrice := nextPrice
-                        i         := nextIdx - 1
+                        curRefIdx    := nextIdx
+                        curRefPriceP := nextPrice
+                        pinkPrice    := nextPrice
+                        i            := nextIdx - 1
                         continue
                 i -= 1
+
+            // catat puncak acuan terakhir (yang akhirnya dipakai)
+            string wktRefAkhirP = str.format_time(timeArr.get(curRefIdx), "dd/MM HH:mm", "GMT+7")
+            if pinkValid
+                if viaLegIn
+                    skipList.push(wktRefAkhirP + " @ " + str.tostring(curRefPriceP, format.mintick) +
+                         " -> DIPAKAI: kena leg in DBD (" + str.format_time(timeArr.get(legInIdx), "dd/MM HH:mm", "GMT+7") +
+                         "), base di kirinya (" + str.format_time(timeArr.get(hitIdx), "dd/MM HH:mm", "GMT+7") + ")")
+                else
+                    skipList.push(wktRefAkhirP + " @ " + str.tostring(curRefPriceP, format.mintick) +
+                         " -> DIPAKAI: kena base DBD (" + str.format_time(timeArr.get(hitIdx), "dd/MM HH:mm", "GMT+7") + ")")
+            else if not stopP
+                skipList.push(wktRefAkhirP + " @ " + str.tostring(curRefPriceP, format.mintick) +
+                     " -> tidak kena candle apa pun di kiri")
 
         if showLastSH and not na(lastSHIdx)
             int pinkX1 = pinkValid and not na(hitIdx) ? timeArr.get(hitIdx) : timeArr.get(lastSHIdx)
@@ -1571,22 +1613,27 @@ if barstate.islast
             string txtSkip = ""
             int    nSkip   = skipList.size()
             if nSkip > 0
-                txtSkip := "\nPuncak dilewati (" + str.tostring(nSkip) + "):"
-                for s = 0 to math.min(nSkip, 6) - 1
-                    txtSkip += "\n- " + skipList.get(s)
-                if nSkip > 6
-                    txtSkip += "\n- +" + str.tostring(nSkip - 6) + " lainnya"
+                txtSkip := "\nPuncak acuan (" + str.tostring(nSkip) + "):"
+                for s = 0 to math.min(nSkip, 8) - 1
+                    txtSkip += "\n" + str.tostring(s + 1) + ". " + skipList.get(s)
+                if nSkip > 8
+                    txtSkip += "\n+" + str.tostring(nSkip - 8) + " lainnya"
             else
-                txtSkip := "\nPuncak dilewati: tidak ada"
+                txtSkip := "\nPuncak acuan: tidak ada"
+
+            // label di kanan bar terakhir (area kosong), di atas garis pink
+            int geserKananP = (time - time[1]) * 3
 
             lastSHLabel := label.new(
-                 x         = lastSHIdx,
+                 x         = time + geserKananP,
                  y         = pinkPrice,
+                 xloc      = xloc.bar_time,
                  text      = "Garis Control - " + str.tostring(pinkPrice, format.mintick) + waktuDbd + txtSkip,
-                 style     = label.style_label_down,
-                 color     = color.new(lastSHLineCol, 100),
+                 style     = label.style_label_lower_left,
+                 color     = color.new(color.black, 20),
                  textcolor = lastSHLineCol,
-                 size      = size.small)
+                 textalign = text.align_left,
+                 size      = size.small)  
 
         // ===== GARIS CONTROL RBR (hijau) =====
         int   lastSLIdx   = na
@@ -1597,59 +1644,95 @@ if barstate.islast
                 lastSLPrice := swP.get(k)
                 break
 
+        // GARIS SWING LOW
         float greenPrice = lastSLPrice
         bool  greenValid = false
         int   hitIdxG    = na
         int   curRefIdxG = lastSLIdx
-        array<string> skipListG = array.new_string()
+        float curRefPriceG = lastSLPrice
+        bool  stopG      = false
+        bool  viaLegInG  = false
+        int   legInIdxG  = na
+        array<string> skipListG = array.new_string()   // riwayat lembah acuan
 
         if not na(lastSLIdx) and lastSLIdx > 0
             int i = lastSLIdx - 1
             while i >= 0
-                float wTop = hiArr.get(i)      // ekor atas
-                float wBot = loArr.get(i)      // ekor bawah
-                float bTop = topArr.get(i)     // puncak body
-                float bBot = botArr.get(i)     // dasar body
+                // range ekor (low..high) sudah mencakup body
+                if greenPrice >= loArr.get(i) and greenPrice <= hiArr.get(i)
 
-                // 1) Candle adalah base RBR aktif: ekor atas/bawah boleh menabrak
-                if f_baseAktifRbr(i) and greenPrice >= wBot and greenPrice <= wTop
-                    greenPrice := f_baseBottomAt(i)
-                    greenValid := true
-                    hitIdxG    := i
-                    break
+                    // leg in RBR = bagian pola, bukan base, dan candle kanannya adalah base
+                    bool isLegInG  = rbrPat.get(i) == 1 and rbrBaseFlag.get(i) == 0 and i + 1 < rbrBaseFlag.size() and rbrBaseFlag.get(i + 1) == 1
+                    // candle tepat di kiri leg in adalah base RBR yang masih aktif
+                    bool kiriBaseG = i >= 1 and f_baseAktifRbr(i - 1)
 
-                // 2) Selain base aktif, hanya BODY yang dianggap tabrakan
-                if greenPrice >= bBot and greenPrice <= bTop
-                    if rbrPat.get(i) == 1
-                        // bagian pola RBR (leg in / leg out / base yang sudah mati):
-                        // lewati, cek candle di kirinya dengan harga yang sama
-                        if rbrBaseFlag.get(i) == 1
-                            skipListG.push("base mati @ " + str.format_time(timeArr.get(i), "dd/MM HH:mm", "GMT+7"))
-                        i -= 1
-                        continue
+                    if f_baseAktifRbr(i)
+                        // skenario 1: kena base RBR aktif
+                        greenPrice := f_baseBottomAt(i)
+                        greenValid := true
+                        hitIdxG    := i
+                        break
+                    else if isLegInG and kiriBaseG
+                        // skenario 2: kena leg in RBR, dan candle di kirinya adalah base
+                        greenPrice := f_baseBottomAt(i - 1)
+                        greenValid := true
+                        hitIdxG    := i - 1
+                        viaLegInG  := true
+                        legInIdxG  := i
+                        break
                     else
-                        // bukan base: pindah ke lembah (swing low) yang LEBIH RENDAH
-                        // dari harga acuan saat ini, dan berada di kiri candle ini
+                        // alasan singkat kenapa lembah ini dilewati
+                        string alasan = ""
+                        if rbrBaseFlag.get(i) == 1
+                            alasan := "kena base RBR yang sudah mati"
+                        else if isLegInG
+                            alasan := "kena leg in RBR, tapi candle kirinya bukan base aktif"
+                        else if rbrPat.get(i) == 1
+                            alasan := "kena leg out RBR, bukan base"
+                        else
+                            alasan := "kena candle biasa, bukan base"
+
+                        string wktHit = str.format_time(timeArr.get(i), "dd/MM HH:mm", "GMT+7")
+                        string wktRef = str.format_time(timeArr.get(curRefIdxG), "dd/MM HH:mm", "GMT+7")
+
+                        // cari lembah terdekat di kiri lembah acuan saat ini yang LEBIH RENDAH
                         int   nextIdx   = na
                         float nextPrice = na
                         for k = swP.size() - 1 to 0
-                            if swT.get(k) == -1 and swIdx.get(k) < i and swP.get(k) < greenPrice
+                            if swT.get(k) == -1 and swIdx.get(k) < curRefIdxG and swP.get(k) < greenPrice
                                 nextIdx   := swIdx.get(k)
                                 nextPrice := swP.get(k)
                                 break
 
                         if na(nextIdx)
+                            skipListG.push(wktRef + " @ " + str.tostring(curRefPriceG, format.mintick) +
+                                 " -> SKIP: " + alasan + " (" + wktHit + "), tidak ada lembah lebih rendah, berhenti")
+                            stopG := true
                             break
 
-                        skipListG.push(
-                             str.format_time(timeArr.get(curRefIdxG), "dd/MM HH:mm", "GMT+7") +
-                             " @ " + str.tostring(greenPrice, format.mintick))
+                        skipListG.push(wktRef + " @ " + str.tostring(curRefPriceG, format.mintick) +
+                             " -> SKIP: " + alasan + " (" + wktHit + ")")
 
-                        curRefIdxG := nextIdx
-                        greenPrice := nextPrice
-                        i          := nextIdx - 1
+                        curRefIdxG   := nextIdx
+                        curRefPriceG := nextPrice
+                        greenPrice   := nextPrice
+                        i            := nextIdx - 1
                         continue
                 i -= 1
+
+            // catat lembah acuan terakhir (yang akhirnya dipakai)
+            string wktRefAkhir = str.format_time(timeArr.get(curRefIdxG), "dd/MM HH:mm", "GMT+7")
+            if greenValid
+                if viaLegInG
+                    skipListG.push(wktRefAkhir + " @ " + str.tostring(curRefPriceG, format.mintick) +
+                         " -> DIPAKAI: kena leg in RBR (" + str.format_time(timeArr.get(legInIdxG), "dd/MM HH:mm", "GMT+7") +
+                         "), base di kirinya (" + str.format_time(timeArr.get(hitIdxG), "dd/MM HH:mm", "GMT+7") + ")")
+                else
+                    skipListG.push(wktRefAkhir + " @ " + str.tostring(curRefPriceG, format.mintick) +
+                         " -> DIPAKAI: kena base RBR (" + str.format_time(timeArr.get(hitIdxG), "dd/MM HH:mm", "GMT+7") + ")")
+            else if not stopG
+                skipListG.push(wktRefAkhir + " @ " + str.tostring(curRefPriceG, format.mintick) +
+                     " -> tidak kena candle apa pun di kiri")
 
         if showLastSL and not na(lastSLIdx)
             int greenX1 = greenValid and not na(hitIdxG) ? timeArr.get(hitIdxG) : timeArr.get(lastSLIdx)
@@ -1670,22 +1753,41 @@ if barstate.islast
             string txtSkipG = ""
             int    nSkipG   = skipListG.size()
             if nSkipG > 0
-                txtSkipG := "\nLembah dilewati (" + str.tostring(nSkipG) + "):"
-                for s = 0 to math.min(nSkipG, 6) - 1
-                    txtSkipG += "\n- " + skipListG.get(s)
-                if nSkipG > 6
-                    txtSkipG += "\n- +" + str.tostring(nSkipG - 6) + " lainnya"
+                txtSkipG := "\nLembah acuan (" + str.tostring(nSkipG) + "):"
+                for s = 0 to math.min(nSkipG, 8) - 1
+                    txtSkipG += "\n" + str.tostring(s + 1) + ". " + skipListG.get(s)
+                if nSkipG > 8
+                    txtSkipG += "\n+" + str.tostring(nSkipG - 8) + " lainnya"
             else
-                txtSkipG := "\nLembah dilewati: tidak ada"
+                txtSkipG := "\nLembah acuan: tidak ada"
+
+            // label di kanan bar terakhir (area kosong), di bawah garis hijau
+            int geserKananG = (time - time[1]) * 3
 
             lastSLLabel := label.new(
-                 x         = lastSLIdx,
+                 x         = time + geserKananG,
                  y         = greenPrice,
+                 xloc      = xloc.bar_time,
                  text      = "Garis Control RBR - " + str.tostring(greenPrice, format.mintick) + waktuRbr + txtSkipG,
-                 style     = label.style_label_up,
-                 color     = color.new(lastSLLineCol, 100),
+                 style     = label.style_label_upper_left,
+                 color     = color.new(color.black, 20),
                  textcolor = lastSLLineCol,
-                 size      = size.small)
+                 textalign = text.align_left,
+                 size      = size.small)     
+
+        if showLastSL and not na(lastSLIdx)
+            int greenX1 = greenValid and not na(hitIdxG) ? timeArr.get(hitIdxG) : timeArr.get(lastSLIdx)
+
+            lastSLLine := line.new(
+                 x1 = greenX1,                y1 = greenPrice,
+                 x2 = time,                   y2 = greenPrice,
+                 xloc   = xloc.bar_time,
+                 extend = extend.right,
+                 color  = lastSLLineCol,
+                 style  = greenValid ? line.style_solid : line.style_dashed,
+                 width  = 2)
+
+           
         
         // ===== FIBONACCI 25% + TP =====
         if not na(lastSHIdx) and not na(lastSLIdx) and pinkPrice > greenPrice
