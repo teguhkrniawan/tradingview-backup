@@ -348,11 +348,11 @@ f_dbd_tipe_3(okLegIn, okLegOut, okCandle2, okFvgLegOut, dropOK) =>
 f_legOutBodyOk(float o, float h, float l, float c) =>
     f_convertPip(f_body(o, c)) >= f_convertPip(f_totalWick(o, h, l, c))
 
-// candle leg out valid: drop, body vs ekor (sesuai sensitifitas), dan posisi close
-// close leg out harus di bawah open leg in dan close leg in
+// candle leg out valid: drop, body vs ekor (sesuai sensitifitas), dan posisi
+// MANDATORY: close leg out < close leg in DAN open leg out < open leg in
 // cek body >= AVG sudah dipindah ke f_bodyAvgOk (error code 6)
 f_legOut_valid(float o, float h, float l, float c, float openLegIn, float closeLegIn, float toleransi_persen, string mode, int offset) =>
-    bool posisiOk = c < openLegIn and c < closeLegIn
+    bool posisiOk = c < closeLegIn and o < openLegIn
 
     if mode == 'dbd' and inputSensitifitas == 'HIGH'
         f_isDrop(o, c) and f_body(o, c) > f_totalWick(o, h, l, c) and posisiOk
@@ -580,9 +580,10 @@ f_legIn_valid_rbr(float o, float h, float l, float c) =>
     else
         f_isBullish(o, c)      // syarat body vs ekor ada di error code 7
 
-// ---------- Leg Out RBR: bullish, close di atas open & close leg in ----------
+// ---------- Leg Out RBR: bullish, posisi MANDATORY ----------
+// close leg out > close leg in DAN open leg out > open leg in
 f_legOut_valid_rbr(float o, float h, float l, float c, float openLegIn, float closeLegIn) =>
-    bool posisiOk = c > openLegIn and c > closeLegIn
+    bool posisiOk = c > closeLegIn and o > openLegIn
     if inputSensitifitas == 'HIGH'
         f_isBullish(o, c) and f_body(o, c) > f_totalWick(o, h, l, c) and posisiOk
     else if inputSensitifitas == 'MEDIUM'
@@ -658,11 +659,11 @@ f_rbr_single(
             errCount += 1
             errCodes += "8 "
 
-        if l2 < o1          // ekor bawah base menembus open leg in (cermin kode 9)
+        if l2 < l1          // ekor bawah base menembus open leg in (cermin kode 9)
             errCount += 1
             errCodes += "9 "
 
-        if h2 > c3          // ekor atas base melewati close leg out (cermin kode 10)
+        if h2 > h3          // ekor atas base melewati close leg out (cermin kode 10)
             errCount += 1
             errCodes += "10 "
 
@@ -679,8 +680,8 @@ f_errDescRbr(string code) =>
         "6"  => "Body leg out < AVG body"
         "7"  => "Ekor leg in > body leg in"
         "8"  => "Ekor leg out > body leg out"
-        "9"  => "Ekor bawah base menembus open leg in"
-        "10" => "Ekor atas base melewati close leg out"
+        "9"  => "Ekor bawah base menembus ekor bawah leg in"
+        "10" => "Ekor atas base melewati ekor atas leg out"
         => "Kode tidak dikenal"
 
 f_gradeTipRbr(int errCount, string errCodes) =>
@@ -747,16 +748,16 @@ f_baseMultipleRbr(int nBase, float pct) =>
         //     ok := false
     ok
     
-// Kode 9: semua ekor bawah base harus >= open leg in
+// Kode 9: semua ekor bawah base harus >= ekor bawah (low) leg in
 f_baseBawahRbrOk(int nBase) =>
-    float openLegIn = open[nBase + 2]
+    float lowLegIn = low[nBase + 2]
     bool ok = true
     for j = 2 to nBase + 1
-        if low[j] < openLegIn
+        if low[j] < lowLegIn
             ok := false
     ok
 
-// Kode 10: semua ekor atas base harus <= high leg out
+// Kode 10: semua ekor atas base harus <= ekor atas (high) leg out
 f_baseAtasRbrOk(int nBase) =>
     float highLegOut = high[1]
     bool ok = true
@@ -1526,6 +1527,18 @@ if barstate.islast
                     // candle tepat di kiri leg in adalah base DBD yang masih aktif
                     bool kiriBase = i >= 1 and f_baseAktif(i - 1)
 
+                    // leg out DBD = bagian pola, bukan base, dan candle kirinya adalah base
+                    bool isLegOutP = patFlag.get(i) == 1 and baseFlag.get(i) == 0 and i >= 1 and baseFlag.get(i - 1) == 1
+                    // cari candle base aktif di area leg out ini yang disentuh garis (ekor atau body)
+                    int baseHitP = na
+                    if isLegOutP
+                        int jbP = i - 1
+                        while jbP >= 0 and baseFlag.get(jbP) == 1
+                            if f_baseAktif(jbP) and pinkPrice >= loArr.get(jbP) and pinkPrice <= hiArr.get(jbP)
+                                baseHitP := jbP
+                                break
+                            jbP -= 1
+
                     if f_baseAktif(i)
                         // skenario 1: kena base DBD aktif
                         pinkPrice := f_baseTopAt(i)
@@ -1539,6 +1552,12 @@ if barstate.islast
                         hitIdx    := i - 1
                         viaLegIn  := true
                         legInIdx  := i
+                        break
+                    else if isLegOutP and not na(baseHitP)
+                        // skenario 3: kena leg out DBD, dan garis juga menyentuh base di area ini
+                        pinkPrice := f_baseTopAt(baseHitP)
+                        pinkValid := true
+                        hitIdx    := baseHitP
                         break
                     else
                         // alasan singkat kenapa puncak ini dilewati
@@ -1666,6 +1685,18 @@ if barstate.islast
                     // candle tepat di kiri leg in adalah base RBR yang masih aktif
                     bool kiriBaseG = i >= 1 and f_baseAktifRbr(i - 1)
 
+                    // leg out RBR = bagian pola, bukan base, dan candle kirinya adalah base
+                    bool isLegOutG = rbrPat.get(i) == 1 and rbrBaseFlag.get(i) == 0 and i >= 1 and rbrBaseFlag.get(i - 1) == 1
+                    // cari candle base aktif di area leg out ini yang disentuh garis (ekor atau body)
+                    int baseHitG = na
+                    if isLegOutG
+                        int jb = i - 1
+                        while jb >= 0 and rbrBaseFlag.get(jb) == 1
+                            if f_baseAktifRbr(jb) and greenPrice >= loArr.get(jb) and greenPrice <= hiArr.get(jb)
+                                baseHitG := jb
+                                break
+                            jb -= 1
+
                     if f_baseAktifRbr(i)
                         // skenario 1: kena base RBR aktif
                         greenPrice := f_baseBottomAt(i)
@@ -1679,6 +1710,12 @@ if barstate.islast
                         hitIdxG    := i - 1
                         viaLegInG  := true
                         legInIdxG  := i
+                        break
+                    else if isLegOutG and not na(baseHitG)
+                        // skenario 3: kena leg out RBR, dan garis juga menyentuh base di area ini
+                        greenPrice := f_baseBottomAt(baseHitG)
+                        greenValid := true
+                        hitIdxG    := baseHitG
                         break
                     else
                         // alasan singkat kenapa lembah ini dilewati
