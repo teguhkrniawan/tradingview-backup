@@ -477,12 +477,17 @@ f_errDesc(string code) =>
         "9"  => "Ekor atas base menembus open leg in"
         "10" => "Ekor bawah base turun di bawah low leg out"
         "11" => "Jarak base > 50% body leg out"
+        "12" => "Harga sudah menyentuh zona di kanan"
         => "Kode tidak dikenal"
 
 // Label hanya huruf grade (A, B, C, ...)
 f_gradeText(int errCount, string errCodes) =>
     int idx = math.min(errCount, 25)
     str.substring("ABCDEFGHIJKLMNOPQRSTUVWXYZ", idx, idx + 1)
+
+// Kode yang MANDATORY saat devMode uncheck (dilonggarkan saat devMode dicentang)
+f_isMandatory(string code) =>
+    code == "4" or code == "7" or code == "8" or code == "11" or code == "12"
 
 // Isi tooltip: grade + daftar error beserta penjelasannya
 f_gradeTip(int errCount, string errCodes) =>
@@ -492,12 +497,21 @@ f_gradeTip(int errCount, string errCodes) =>
         t += "\nTidak ada error"
     else
         array<string> codes = str.split(errCodes, " ")
+        string tNon  = ""
+        string tMand = ""
         for k = 0 to codes.size() - 1
             string c = codes.get(k)
             if c != ""
-                t += "\n[" + c + "] " + f_errDesc(c)
+                string baris = "\n[" + c + "] " + f_errDesc(c)
+                if f_isMandatory(c)
+                    tMand += baris
+                else
+                    tNon += baris
+        if tNon != ""
+            t += "\n\nNon mandatory (skor):" + tNon
+        if tMand != ""
+            t += "\n\nMandatory (lolos karena DEV MODE):" + tMand
     t
-
 
 
 // =====================================================================
@@ -713,6 +727,7 @@ f_errDescRbr(string code) =>
         "9"  => "Ekor bawah base menembus ekor bawah leg in"
         "10" => "Ekor atas base melewati ekor atas leg out"
         "11" => "Jarak base > 50% body leg out"
+        "12" => "Harga sudah menyentuh zona di kanan"
         => "Kode tidak dikenal"
 
 f_gradeTipRbr(int errCount, string errCodes) =>
@@ -721,11 +736,33 @@ f_gradeTipRbr(int errCount, string errCodes) =>
         t += "\nTidak ada error"
     else
         array<string> codes = str.split(errCodes, " ")
+        string tNon  = ""
+        string tMand = ""
         for k = 0 to codes.size() - 1
             string c = codes.get(k)
             if c != ""
-                t += "\n[" + c + "] " + f_errDescRbr(c)
+                string baris = "\n[" + c + "] " + f_errDescRbr(c)
+                if f_isMandatory(c)
+                    tMand += baris
+                else
+                    tNon += baris
+        if tNon != ""
+            t += "\n\nNon mandatory (skor):" + tNon
+        if tMand != ""
+            t += "\n\nMandatory (lolos karena DEV MODE):" + tMand
     t
+
+// Tambah pesan "harga kena di kanan" ke tooltip (kelompok mandatory)
+f_tipKena(string tip, bool kena, string pesan) =>
+    string t = tip
+    if kena
+        if str.contains(t, "Mandatory (lolos")
+            t += "\n[12] " + pesan
+        else
+            t += "\n\nMandatory (lolos karena DEV MODE):\n[12] " + pesan
+    t
+
+
 
 var array<int>    zLeft      = array.new<int>()
 var array<int>    zRight     = array.new<int>()
@@ -891,7 +928,7 @@ validSingle := validSingle and errSingle <= str.pos("ABCDEFGHIJK", inputMinGrade
 markSingle        = validSingle and barstate.isconfirmed and showArrow and showDbdSingle
 markRectangleBase = validSingle and barstate.isconfirmed and showDbdSingle
 
-if markSingle and not backtestMode
+if markSingle
     label.new(
          bar_index - 2,
          high[2],
@@ -916,7 +953,7 @@ validRbr := validRbr and errRbr <= str.pos("ABCDEFGHIJK", inputMinGrade)
 markRbr = validRbr and barstate.isconfirmed and showRbrSingle
 
 // non-backtest: langsung gambar
-if markRbr and not backtestMode
+if markRbr
     box.new(
          left = bar_index - 3, top = high[2],
          right = bar_index - 1, bottom = low[2],
@@ -933,7 +970,7 @@ if markRbr and not backtestMode
              tooltip   = f_gradeTipRbr(errRbr, errCodeRbr))
 
 // backtest: simpan zona
-if markRbr and backtestMode
+if markRbr
     rLeft.push(bar_index - 3)
     rRight.push(bar_index - 1)
     rTop.push(high[2])
@@ -953,7 +990,7 @@ if errRbrM > str.pos("ABCDEFGHIJK", inputMinGrade)   // <-- TARUH DI SINI
 markRbrMulti = nRbrMulti != 0 and barstate.isconfirmed and showRbrMultiple
 
 // non-backtest: langsung gambar
-if markRbrMulti and not backtestMode
+if markRbrMulti
     box.new(
          left = bar_index - (nRbrMulti + 1), top = f_baseTop(nRbrMulti),
          right = bar_index - 2,              bottom = f_baseBottom(nRbrMulti),
@@ -970,7 +1007,7 @@ if markRbrMulti and not backtestMode
              tooltip   = f_gradeTipRbr(errRbrM, errCodeRbrM))
 
 // backtest: simpan zona
-if markRbrMulti and backtestMode
+if markRbrMulti
     rLeft.push(bar_index - (nRbrMulti + 1))
     rRight.push(bar_index - 2)
     rTop.push(f_baseTop(nRbrMulti))
@@ -1035,7 +1072,7 @@ string gradeMulti = str.substring("ABCDEFGH", math.min(errMulti, 7), math.min(er
 
 string txtMulti = nBaseMulti == 0 ? "" : f_gradeText(errMulti, errCodeMulti)
 // ---- simpan zona Single ----
-if backtestMode and markRectangleBase
+if markRectangleBase
     zLeft.push(bar_index - 3)
     zRight.push(bar_index - 1)
     zTop.push(high[2])
@@ -1050,7 +1087,7 @@ if backtestMode and markRectangleBase
     baseZone.set(bar_index - 2, zTop.size() - 1)
 
 // ---- simpan zona Multiple ----
-if backtestMode and nBaseMulti != 0 and barstate.isconfirmed and showDbdMultiple
+if nBaseMulti != 0 and barstate.isconfirmed and showDbdMultiple
     zLeft.push(bar_index - (nBaseMulti + 1))
     zRight.push(bar_index - 2)
     zTop.push(f_baseTop(nBaseMulti))
@@ -1065,7 +1102,7 @@ if backtestMode and nBaseMulti != 0 and barstate.isconfirmed and showDbdMultiple
     for d = 2 to nBaseMulti + 1
         baseZone.set(bar_index - d, zTop.size() - 1)
 
-if markMulti and not backtestMode
+if markMulti
     box.new(
          left   = bar_index - (nBaseMulti + 1),
          top    = f_baseTop(nBaseMulti),
@@ -1089,7 +1126,7 @@ if markMulti and not backtestMode
 // =====================================================================
 // KOTAK CANDLE 2
 // =====================================================================
-if markRectangleBase and not backtestMode
+if markRectangleBase
     box.new(
          left = bar_index - 3,
          top = high[2],
@@ -1356,20 +1393,22 @@ if rActive.size() > 0
 
 // gambar ulang hanya saat data historis selesai dimuat, lalu sekali di awal tiap bar baru
 bool doDraw = barstate.islastconfirmedhistory or (barstate.isrealtime and barstate.isnew)
-// if barstate.islast and backtestMode
-if doDraw and backtestMode
+
+// DBD AREA
+if doDraw
     while zoneBoxes.size() > 0
         box.delete(zoneBoxes.pop())
     while zoneLabels.size() > 0
         label.delete(zoneLabels.pop())
 
-    // dari terbaru ke lama, berhenti di 450 supaya aman dari limit 500
     if zTop.size() > 0
         for z = zTop.size() - 1 to 0
-            if zoneBoxes.size() >= 450
+            if zoneBoxes.size() >= 250
                 break
 
-            if not f_zonaInvalid(zTop.get(z), zBot.get(z), zStart.get(z))
+            bool kena = f_zonaInvalid(zTop.get(z), zBot.get(z), zStart.get(z))
+
+            if not kena or devMode
                 bool  isSingle = zIsSingle.get(z)
                 color col      = isSingle ? color.blue : color.orange
 
@@ -1390,9 +1429,10 @@ if doDraw and backtestMode
                          color = isSingle ? markerColor : color.orange,
                          textcolor = color.black,
                          size = size.tiny,
-                         tooltip = zTip.get(z)))
+                         tooltip = f_tipKena(zTip.get(z), kena, "Harga sudah menyentuh ekor atas base di kanan")))
 
-if doDraw and backtestMode
+// RBR AREA
+if doDraw
     while rBoxes.size() > 0
         box.delete(rBoxes.pop())
     while rLabels.size() > 0
@@ -1400,9 +1440,12 @@ if doDraw and backtestMode
 
     if rTop.size() > 0
         for z = rTop.size() - 1 to 0
-            if rBoxes.size() >= 100
+            if rBoxes.size() >= 250
                 break
-            if not f_zonaInvalidRbr(rBot.get(z), rStart.get(z))
+
+            bool kena = f_zonaInvalidRbr(rBot.get(z), rStart.get(z))
+
+            if not kena or devMode
                 bool  isMulti = rIsMulti.get(z)
                 color col     = isMulti ? color.teal : color.green
 
@@ -1412,6 +1455,7 @@ if doDraw and backtestMode
                      xloc = xloc.bar_time,
                      border_color = col, border_width = 1,
                      bgcolor = color.new(col, 85)))
+
                 if showArrow
                     rLabels.push(label.new(
                          x = timeArr.get(rLblX.get(z)), y = rBot.get(z),
@@ -1421,8 +1465,8 @@ if doDraw and backtestMode
                          color = col,
                          textcolor = isMulti ? color.white : color.black,
                          size = size.tiny,
-                         tooltip = rTip.get(z)))
-
+                         tooltip = f_tipKena(rTip.get(z), kena, "Harga sudah menyentuh ekor bawah base di kanan")))
+                         
 if barstate.islast
     while swingLabels.size() > 0
         label.delete(swingLabels.pop())
