@@ -1408,13 +1408,14 @@ if barstate.islast
         label.delete(lastSHLabel)
         lastSHLabel := na
 
-    if not na(lastSHLine)
-        line.delete(lastSHLine)
-        lastSHLine := na
+    if not na(lastSLLine)
+        line.delete(lastSLLine)
+        lastSLLine := na
 
-    if not na(lastSHLabel)
-        label.delete(lastSHLabel)
-        lastSHLabel := na
+    if not na(lastSLLabel)
+        label.delete(lastSLLabel)
+        lastSLLabel := na
+
 
     if not na(fibTopBox)
         box.delete(fibTopBox)
@@ -1820,19 +1821,6 @@ if barstate.islast
                  textcolor = lastSLLineCol,
                  textalign = text.align_left,
                  size      = size.small)     
-
-        if showLastSL and not na(lastSLIdx)
-            int greenX1 = greenValid and not na(hitIdxG) ? timeArr.get(hitIdxG) : timeArr.get(lastSLIdx)
-
-            lastSLLine := line.new(
-                 x1 = greenX1,                y1 = greenPrice,
-                 x2 = time,                   y2 = greenPrice,
-                 xloc   = xloc.bar_time,
-                 extend = extend.right,
-                 color  = lastSLLineCol,
-                 style  = greenValid ? line.style_solid : line.style_dashed,
-                 width  = 2)
-
            
         
         // ===== FIBONACCI 25% + TP =====
