@@ -23,7 +23,8 @@ inputSensitifitas = input.string(
      group = "Sensitifitas")
 
 showDebugLegin = input.bool(false, "DEBUG", group="Debug")
-devMode = input.bool(false, "DEV MODE", group="Debug", tooltip="Centang: error kode 4 (jarak base > 50% body leg in/out) TIDAK mandatory, hanya jadi pengurang grade.\nUncheck: error kode 4 MANDATORY, pola dibuang kalau jarak base melebihi 50%.")
+devMode = input.bool(false, "DEV MODE", group="Debug", tooltip="Centang:\n- Error kode 4 (jarak base > 50% body leg in/out) TIDAK mandatory, hanya jadi pengurang grade.\n- Validasi harga ketutup di kanan DINONAKTIFKAN (zona langsung digambar).\n\nUncheck:\n- Error kode 4 MANDATORY.\n- Validasi harga ketutup di kanan AKTIF (zona yang sudah tersentuh harga dibuang, garis control hanya memakai zona yang masih aktif).")
+bool backtestMode = not devMode   // validasi harga ketutup AKTIF saat devMode uncheck
 
 jmlLabel       = input.int(100, "Jumlah label debug", minval=1, maxval=400, group="Debug")
 geserKiri      = input.int(0, "Geser ke kiri (jumlah bar)", minval=0, group="Debug")
@@ -41,12 +42,13 @@ lastSLLineCol = color.lime
 showLastSH   = input.bool(true, "Garis horizontal Swing High terakhir", group="Swing")
 showLastSL    = input.bool(true, "Garis horizontal Swing Low terakhir (RBR)", group="Swing")
 swingBasis = input.string("Ekor", "Swing High/Low diambil dari", options=["Body", "Ekor"], group="Swing")
+show618 = input.bool(false, "Garis 61.8%", group="Swing")
 
 showDbdSingle   = input.bool(true, "Tampilkan DBD Single", group="Penanda")
 showRbrSingle = input.bool(true, "Tampilkan RBR Single", group="Penanda")
 showDbdMultiple = input.bool(true, "Tampilkan DBD Multiple", group="Penanda")
 showRbrMultiple = input.bool(true, "Tampilkan RBR Multiple", group="Penanda")
-backtestMode = input.bool(true, "Backtest Mode (buang zona yang sudah tersentuh harga)", group="Penanda")
+// backtestMode = input.bool(true, "Backtest Mode (buang zona yang sudah tersentuh harga)", group="Penanda")
 
 inputMinGrade = input.string("K", "Grade minimum yang ditampilkan", options=["A","B","C","D","E","F","G","H","I","J","K"], group="Sensitifitas", tooltip="Pilih C: tampil C, B, A. Pilih B: tampil B, A. K = tampilkan semua.")
 inputTinggiBodyBase = input.bool(true, "Tinggi body base vs legin/legout (body base tidak boleh lebih besar)", group="Base")
@@ -1065,6 +1067,7 @@ if markRectangleBase and not backtestMode
 
 
 var array<label> debugLabels = array.new<label>()
+int barDurMs = time - nz(time[1], time)
 
 if barstate.islast
     // bersihkan label lama
@@ -1887,12 +1890,16 @@ if barstate.islast
                      xloc = xloc.bar_time,
                      color = zzLineCol, width = 1))
 
-            // swingLabels.push(label.new(
-            //      x = x,
-            //      y = y,
-            //      xloc = xloc.bar_time,
-            //      text = (isHigh ? "SH " : "SL ") + str.tostring(y, format.mintick),
-            //      style = isHigh ? label.style_label_down : label.style_label_up,
-            //      color = isHigh ? swingHighCol : swingLowCol,
-            //      textcolor = isHigh ? color.white : color.black,
-            //      size = size.tiny))
+            // Garis 61.8%: hanya untuk leg turun (gunung kiri -> lembah kanan)
+            if show618 and k > 0
+                if swT.get(k - 1) == 1 and swT.get(k) == -1
+                    float gunung = swP.get(k - 1)
+                    float lembah = y
+                    float p618   = lembah + (gunung - lembah) * 61.8 / 100
+
+                    zzLines.push(line.new(
+                         x1 = x,                    y1 = p618,
+                         x2 = x + barDurMs * 2,     y2 = p618,
+                         xloc  = xloc.bar_time,
+                         color = color.white,
+                         width = 1))
