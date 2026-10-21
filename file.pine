@@ -307,7 +307,7 @@ f_legIn_valid(float o, float h, float l, float c, float toleransi_persen, string
 // =====================================================================
 f_fvg_legin_dbd(float lowLeftLegIn, float highRightLegIn) =>
     // lowLeftLegIn > highRightLegIn
-    lowLeftLegIn > (highRightLegIn - 0.00005)
+    lowLeftLegIn > highRightLegIn
 
 
 // f_fvg_legin_dbd(float lowLeftLegIn, float highRightLegIn) =>
@@ -337,7 +337,7 @@ f_fvg_legin_dbd(float lowLeftLegIn, float highRightLegIn) =>
 
 f_fvg_legout_dbd(float lowLeftLegOut, float highRightLegOut) =>
     // lowLeftLegOut > highRightLegOut 
-    lowLeftLegOut > (highRightLegOut - 0.00005) 
+    lowLeftLegOut > highRightLegOut 
 
 // f_fvg_legout_dbd(float lowLeftLegOut, float highRightLegOut) =>
 //     lowLeftLegOut > highRightLegOut or (highRightLegOut - lowLeftLegOut) <= 0.1
@@ -416,17 +416,18 @@ f_dbd_multiple(int minBase, int maxBase, float pct, bool needDrop) =>
                 if not tanpaFvg or inputSensitifitas == 'LOW'
                     nFound := n
 
-                    if tanpaFvg
-                        errCount += 1
-                        errCodes += "3 "
-                    else
-                        if not okFvgIn and devMode
-                            errCount += 1
-                            errCodes += "1 "
-                        if not okFvgOut
-                            errCount += 1
-                            errCodes += "2 "
+                    // if tanpaFvg
+                    //     errCount += 1
+                    //     errCodes += "3 "
+                    // else
+                        // if not okFvgIn and devMode
+                        //     errCount += 1
+                        //     errCodes += "1 "
 
+                    if not okFvgOut
+                        errCount += 1
+                        errCodes += "2 "
+                        
                     if not jarakInOk
                         errCount += 1
                         errCodes += "4 "
@@ -555,16 +556,16 @@ f_dbd_single(
     string errCodes = ""
 
     if valid
-        if tanpaFvg
+        // if tanpaFvg
+        //     errCount += 1
+        //     errCodes += "3 "
+        // else
+            // if not okFvgLegIn and devMode
+            //     errCount += 1
+            //     errCodes += "1 "
+        if not okFvgLegOut
             errCount += 1
-            errCodes += "3 "
-        else
-            if not okFvgLegIn and devMode
-                errCount += 1
-                errCodes += "1 "
-            if not okFvgLegOut
-                errCount += 1
-                errCodes += "2 "
+            errCodes += "2 "
 
         if not jarakInOk
             errCount += 1
@@ -603,11 +604,11 @@ f_dbd_single(
 // ---------- FVG bullish ----------
 // Leg In : high candle kiri [4] < low candle kanan [2] (base)
 f_fvg_legin_rbr(float highLeftLegIn, float lowRightLegIn) =>
-    highLeftLegIn < (lowRightLegIn + 0.00005)
+    highLeftLegIn < lowRightLegIn
 
 // Leg Out: high candle kiri [2] (base) < low candle kanan [0]
 f_fvg_legout_rbr(float highLeftLegOut, float lowRightLegOut) =>
-    highLeftLegOut < (lowRightLegOut + 0.00005)
+    highLeftLegOut < lowRightLegOut
 
 // ---------- Leg In RBR: bullish ----------
 f_legIn_valid_rbr(float o, float h, float l, float c) =>
@@ -668,16 +669,17 @@ f_rbr_single(
     string errCodes = ""
 
     if valid
-        if tanpaFvg
+        // if tanpaFvg
+        //     errCount += 1
+        //     errCodes += "3 "
+        // else
+            // if not okFvgLegIn and devMode
+            //     errCount += 1
+            //     errCodes += "1 "
+
+        if not okFvgLegOut
             errCount += 1
-            errCodes += "3 "
-        else
-            if not okFvgLegIn and devMode
-                errCount += 1
-                errCodes += "1 "
-            if not okFvgLegOut
-                errCount += 1
-                errCodes += "2 "
+            errCodes += "2 "
 
         if not jarakInOk
             errCount += 1
@@ -866,16 +868,16 @@ f_rbr_multiple(int minBase, int maxBase, float pct, bool needRally) =>
                 if not tanpaFvg or inputSensitifitas == 'LOW'
                     nFound := n
 
-                    if tanpaFvg
+                    // if tanpaFvg
+                    //     errCount += 1
+                    //     errCodes += "3 "
+                    // else
+                        // if not okFvgIn and devMode
+                        //     errCount += 1
+                        //     errCodes += "1 "
+                    if not okFvgOut
                         errCount += 1
-                        errCodes += "3 "
-                    else
-                        if not okFvgIn and devMode
-                            errCount += 1
-                            errCodes += "1 "
-                        if not okFvgOut
-                            errCount += 1
-                            errCodes += "2 "
+                        errCodes += "2 "
 
                     if not jarakInOk
                         errCount += 1
@@ -928,16 +930,6 @@ validSingle := validSingle and errSingle <= str.pos("ABCDEFGHIJK", inputMinGrade
 markSingle        = validSingle and barstate.isconfirmed and showArrow and showDbdSingle
 markRectangleBase = validSingle and barstate.isconfirmed and showDbdSingle
 
-if markSingle
-    label.new(
-         bar_index - 2,
-         high[2],
-         f_gradeText(errSingle, errCodeSingle),
-         style     = label.style_label_down,
-         color     = markerColor,
-         textcolor = color.black,
-         size      = size.tiny,
-         tooltip   = f_gradeTip(errSingle, errCodeSingle))
 
 [validRbr, errRbr, errCodeRbr] = f_rbr_single(
      open[3], high[3], low[3], close[3],     // C1
@@ -952,22 +944,7 @@ validRbr := validRbr and errRbr <= str.pos("ABCDEFGHIJK", inputMinGrade)
 
 markRbr = validRbr and barstate.isconfirmed and showRbrSingle
 
-// non-backtest: langsung gambar
-if markRbr
-    box.new(
-         left = bar_index - 3, top = high[2],
-         right = bar_index - 1, bottom = low[2],
-         border_color = color.green, border_width = 1,
-         bgcolor = color.new(color.green, 85))
-    if showArrow
-        label.new(
-             bar_index - 2, low[2],
-             f_gradeText(errRbr, errCodeRbr),
-             style     = label.style_label_up,
-             color     = color.green,
-             textcolor = color.black,
-             size      = size.tiny,
-             tooltip   = f_gradeTipRbr(errRbr, errCodeRbr))
+
 
 // backtest: simpan zona
 if markRbr
@@ -989,22 +966,7 @@ if errRbrM > str.pos("ABCDEFGHIJK", inputMinGrade)   // <-- TARUH DI SINI
 
 markRbrMulti = nRbrMulti != 0 and barstate.isconfirmed and showRbrMultiple
 
-// non-backtest: langsung gambar
-if markRbrMulti
-    box.new(
-         left = bar_index - (nRbrMulti + 1), top = f_baseTop(nRbrMulti),
-         right = bar_index - 2,              bottom = f_baseBottom(nRbrMulti),
-         border_color = color.teal, border_width = 1,
-         bgcolor = color.new(color.teal, 85))
-    if showArrow
-        label.new(
-             bar_index - 2, f_baseBottom(nRbrMulti),
-             f_gradeText(errRbrM, errCodeRbrM),
-             style     = label.style_label_up,
-             color     = color.teal,
-             textcolor = color.white,
-             size      = size.tiny,
-             tooltip   = f_gradeTipRbr(errRbrM, errCodeRbrM))
+
 
 // backtest: simpan zona
 if markRbrMulti
@@ -1102,39 +1064,7 @@ if nBaseMulti != 0 and barstate.isconfirmed and showDbdMultiple
     for d = 2 to nBaseMulti + 1
         baseZone.set(bar_index - d, zTop.size() - 1)
 
-if markMulti
-    box.new(
-         left   = bar_index - (nBaseMulti + 1),
-         top    = f_baseTop(nBaseMulti),
-         right  = bar_index - 2,
-         bottom = f_baseBottom(nBaseMulti),
-         border_color = color.orange,
-         border_width = 1,
-         bgcolor = color.new(color.orange, 85))
 
-    label.new(
-         bar_index - 2,
-         f_baseTop(nBaseMulti),
-        //  "M" + str.tostring(nBaseMulti) + ": " + txtMulti,
-         txtMulti,
-         style     = label.style_label_down,
-         color     = color.orange,
-         textcolor = color.black,
-         size      = size.tiny,
-         tooltip   = f_gradeTip(errMulti, errCodeMulti))
-
-// =====================================================================
-// KOTAK CANDLE 2
-// =====================================================================
-if markRectangleBase
-    box.new(
-         left = bar_index - 3,
-         top = high[2],
-         right = bar_index - 1,
-         bottom = low[2],
-         border_color = color.blue,
-         border_width = 1,
-         bgcolor = color.new(color.blue, 85))
 
 
 var array<label> debugLabels = array.new<label>()
@@ -1256,10 +1186,7 @@ f_zonaInvalid(float levelAtas, float levelBawah, int startIdx) =>
     bool kenaHigh = false
     int  endIdx   = barstate.isconfirmed ? bar_index : bar_index - 1
     for i = startIdx to endIdx
-        float bTop = topArr.get(i)
-        float bBot = botArr.get(i)
-
-        if levelAtas >= bBot and levelAtas <= bTop
+        if levelAtas <= topArr.get(i)
             kenaHigh := true
             break
     kenaHigh
@@ -1269,7 +1196,7 @@ f_zonaInvalidRbr(float levelBawah, int startIdx) =>
     bool kena   = false
     int  endIdx = barstate.isconfirmed ? bar_index : bar_index - 1
     for i = startIdx to endIdx
-        if levelBawah >= botArr.get(i) and levelBawah <= topArr.get(i)
+        if levelBawah >= botArr.get(i)
             kena := true
             break
     kena
@@ -1378,7 +1305,7 @@ if zActive.size() > 0
     for a = zActive.size() - 1 to 0
         int z = zActive.get(a)
         float lvl = zTop.get(z)
-        if lvl >= curBot and lvl <= curTop
+        if lvl <= curTop
             zDead.set(z, true)
             zActive.remove(a)
 
@@ -1387,7 +1314,7 @@ if rActive.size() > 0
     for a = rActive.size() - 1 to 0
         int z = rActive.get(a)
         float lvl = rBot.get(z)
-        if lvl >= curBot and lvl <= curTop
+        if lvl >= curBot
             rDead.set(z, true)
             rActive.remove(a)
 
