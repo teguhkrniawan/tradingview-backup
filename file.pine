@@ -23,7 +23,7 @@ inputSensitifitas = input.string(
      group = "Sensitifitas")
 
 showDebugLegin = input.bool(false, "DEBUG", group="Debug")
-devMode = input.bool(false, "DEV MODE", group="Debug", tooltip="Centang:\n- Error kode 4 (jarak base > 50% body leg in/out) TIDAK mandatory, hanya jadi pengurang grade.\n- Validasi harga ketutup di kanan DINONAKTIFKAN (zona langsung digambar).\n\nUncheck:\n- Error kode 4 MANDATORY.\n- Validasi harga ketutup di kanan AKTIF (zona yang sudah tersentuh harga dibuang, garis control hanya memakai zona yang masih aktif).")
+devMode = input.bool(false, "DEV MODE", group="Debug", tooltip="Centang:\n- Error kode 4 (jarak base > 50% body leg in) dan kode 11 (jarak base > 50% body leg out) TIDAK mandatory, hanya jadi pengurang grade.\n- Error kode 7 dan 8 (body leg in/out < 60% tinggi candle) TIDAK mandatory, hanya jadi pengurang grade.\n- Error kode 1 (FVG Leg In tidak valid) ikut dihitung sebagai pengurang grade.\n- Validasi harga ketutup di kanan DINONAKTIFKAN (zona langsung digambar).\n\nUncheck:\n- Error kode 4 dan 11 MANDATORY.\n- Error kode 7 dan 8 MANDATORY (pola dibuang kalau body leg in/out < 60% tinggi candle).\n- Error kode 1 (FVG Leg In tidak valid) TIDAK dihitung sebagai skor.\n- Validasi harga ketutup di kanan AKTIF (zona yang sudah tersentuh harga dibuang, garis control hanya memakai zona yang masih aktif).")
 bool backtestMode = not devMode   // validasi harga ketutup AKTIF saat devMode uncheck
 
 jmlLabel       = input.int(100, "Jumlah label debug", minval=1, maxval=400, group="Debug")
@@ -230,6 +230,14 @@ f_jarakBaseOk(int nBase, float maxRasio) =>
     float bodyLegOut = f_body(open[1], close[1])
     jarak <= bodyLegIn * maxRasio and jarak <= bodyLegOut * maxRasio
 
+// Kode 4: jarak base <= maxRasio x body leg in
+f_jarakBaseLegInOk(int nBase, float maxRasio) =>
+    f_jarakBase(nBase) <= f_body(open[nBase + 2], close[nBase + 2]) * maxRasio
+
+// Kode 11: jarak base <= maxRasio x body leg out
+f_jarakBaseLegOutOk(int nBase, float maxRasio) =>
+    f_jarakBase(nBase) <= f_body(open[1], close[1]) * maxRasio
+
 // Validasi MANDATORY (bisa di-toggle): body tiap candle base tidak boleh
 // lebih besar dari body leg in ATAU body leg out.
 // Base ada di [2] .. [nBase+1], leg out = [1], leg in = [nBase+2]
@@ -261,20 +269,20 @@ f_baseBottom(int nBase) =>
 f_bodyAvgOk(float o, float c, int offset) =>
     f_convertPip(f_body(o, c)) >= f_convertPip(f_avgBodyInPrice(limitCandleAvg, 'dbd', offset))
 
-// Kode error 7: body leg in >= total ekor leg in
-// false berarti ekor leg in lebih panjang daripada body
+// Kode error 7: body leg in >= 60% tinggi candle
 f_legInBodyOk(float o, float h, float l, float c) =>
-    f_convertPip(f_body(o, c)) >= f_convertPip(f_totalWick(o, h, l, c))
+    float tinggi = h - l
+    tinggi > 0 and f_body(o, c) >= tinggi * 0.6
         
 f_legIn_valid(float o, float h, float l, float c, float toleransi_persen, string mode, int offset) =>
     if mode == 'dbd' and inputSensitifitas == 'HIGH'
-        f_isDrop(o, c) and f_body(o, c) > f_totalWick(o, h, l, c)
+        f_isDrop(o, c) and (devMode or f_legInBodyOk(o, h, l, c))
 
     else if mode == 'dbd' and inputSensitifitas == 'MEDIUM'
-        f_isDrop(o, c) and f_body(o, c) >= f_totalWick(o, h, l, c)
+        f_isDrop(o, c) and (devMode or f_legInBodyOk(o, h, l, c))
 
     else if mode == 'dbd' and inputSensitifitas == 'LOW'
-        f_isDrop(o, c)          // syarat body vs ekor dipindah ke error code 7
+        f_isDrop(o, c) and (devMode or f_legInBodyOk(o, h, l, c))
 
     else
         false
@@ -346,10 +354,10 @@ f_dbd_tipe_2(okLegIn, okLegOut, okCandle2, okFvgLegIn, dropOK) =>
 f_dbd_tipe_3(okLegIn, okLegOut, okCandle2, okFvgLegOut, dropOK) =>
     okLegIn and okLegOut and okCandle2 and okFvgLegOut and dropOK
 
-// Kode error 8: body leg out >= total ekor leg out
-// false berarti ekor leg out lebih panjang daripada body
+// Kode error 8: body leg out >= 60% tinggi candle
 f_legOutBodyOk(float o, float h, float l, float c) =>
-    f_convertPip(f_body(o, c)) >= f_convertPip(f_totalWick(o, h, l, c))
+    float tinggi = h - l
+    tinggi > 0 and f_body(o, c) >= tinggi * 0.6
 
 // candle leg out valid: drop, body vs ekor (sesuai sensitifitas), dan posisi
 // MANDATORY: close leg out < close leg in DAN open leg out < open leg in
@@ -364,7 +372,7 @@ f_legOut_valid(float o, float h, float l, float c, float openLegIn, float closeL
         f_isDrop(o, c) and f_body(o, c) >= f_totalWick(o, h, l, c) and posisiOk
 
     else if mode == 'dbd' and inputSensitifitas == 'LOW'
-        f_isDrop(o, c) and posisiOk     // syarat body vs ekor dipindah ke error code 8
+        f_isDrop(o, c) and posisiOk and (devMode or f_legOutBodyOk(o, h, l, c))
 
     else
         false
@@ -400,6 +408,8 @@ f_dbd_multiple(int minBase, int maxBase, float pct, bool needDrop) =>
             if okLegOut and okLegIn and dropIn and f_baseMultiple(n, pct) and f_baseBodyOk(n) and (devMode or f_jarakBaseOk(n, 0.5))
                 bool okFvgIn  = f_fvg_legin_dbd(low[k + 1], high[n + 1])
                 bool jarakOk  = f_jarakBaseOk(n, 0.5)
+                bool jarakInOk  = f_jarakBaseLegInOk(n, 0.5)
+                bool jarakOutOk = f_jarakBaseLegOutOk(n, 0.5)
                 bool tanpaFvg = not okFvgIn and not okFvgOut
 
                 // sensitifitas selain LOW tetap wajib punya minimal 1 FVG
@@ -410,16 +420,20 @@ f_dbd_multiple(int minBase, int maxBase, float pct, bool needDrop) =>
                         errCount += 1
                         errCodes += "3 "
                     else
-                        if not okFvgIn
+                        if not okFvgIn and devMode
                             errCount += 1
                             errCodes += "1 "
                         if not okFvgOut
                             errCount += 1
                             errCodes += "2 "
 
-                    if not jarakOk
+                    if not jarakInOk
                         errCount += 1
                         errCodes += "4 "
+
+                    if not jarakOutOk
+                        errCount += 1
+                        errCodes += "11 "
 
                     if not f_bodyAvgOk(open[k], close[k], k)
                         errCount += 1
@@ -455,13 +469,14 @@ f_errDesc(string code) =>
         "1"  => "FVG Leg In tidak valid"
         "2"  => "FVG Leg Out tidak valid"
         "3"  => "Tanpa FVG"
-        "4"  => "Jarak base > 50% body leg in/out"
+        "4"  => "Jarak base > 50% body leg in"
         "5"  => "Body leg in < AVG body"
         "6"  => "Body leg out < AVG body"
-        "7"  => "Ekor leg in > body leg in"
-        "8"  => "Ekor leg out > body leg out"
+        "7"  => "Body leg in < 60% tinggi candle"
+        "8"  => "Body leg out < 60% tinggi candle"
         "9"  => "Ekor atas base menembus open leg in"
         "10" => "Ekor bawah base turun di bawah low leg out"
+        "11" => "Jarak base > 50% body leg out"
         => "Kode tidak dikenal"
 
 // Label hanya huruf grade (A, B, C, ...)
@@ -512,6 +527,8 @@ f_dbd_single(
 
     // jarak base: base = 1 candle (C2), dihitung relatif ke bar saat ini
     bool jarakOk = f_jarakBaseOk(1, 0.5)
+    bool jarakInOk  = f_jarakBaseLegInOk(1, 0.5)
+    bool jarakOutOk = f_jarakBaseLegOutOk(1, 0.5)
 
     bool baseBodyOk = f_baseBodyOk(1)
     bool polaOk   = okLegIn and okLegOut and okCandle2 and dropOK and baseBodyOk and (devMode or jarakOk)
@@ -528,16 +545,20 @@ f_dbd_single(
             errCount += 1
             errCodes += "3 "
         else
-            if not okFvgLegIn
+            if not okFvgLegIn and devMode
                 errCount += 1
                 errCodes += "1 "
             if not okFvgLegOut
                 errCount += 1
                 errCodes += "2 "
 
-        if not jarakOk
+        if not jarakInOk
             errCount += 1
             errCodes += "4 "
+
+        if not jarakOutOk
+            errCount += 1
+            errCodes += "11 "
 
         if not f_bodyAvgOk(o1, c1, 3)
             errCount += 1
@@ -581,7 +602,7 @@ f_legIn_valid_rbr(float o, float h, float l, float c) =>
     else if inputSensitifitas == 'MEDIUM'
         f_isBullish(o, c) and f_body(o, c) >= f_totalWick(o, h, l, c)
     else
-        f_isBullish(o, c)      // syarat body vs ekor ada di error code 7
+        f_isBullish(o, c) and (devMode or f_legInBodyOk(o, h, l, c))
 
 // ---------- Leg Out RBR: bullish, posisi MANDATORY ----------
 // close leg out > close leg in DAN open leg out > open leg in
@@ -592,7 +613,7 @@ f_legOut_valid_rbr(float o, float h, float l, float c, float openLegIn, float cl
     else if inputSensitifitas == 'MEDIUM'
         f_isBullish(o, c) and f_body(o, c) >= f_totalWick(o, h, l, c) and posisiOk
     else
-        f_isBullish(o, c) and posisiOk
+        f_isBullish(o, c) and posisiOk and (devMode or f_legOutBodyOk(o, h, l, c))
 
 // ---------- Candle base RBR (cermin f_wickVsBodySingle) ----------
 // candle bearish dengan body > ekor dianggap OK (kebalikan dari DBD)
@@ -621,6 +642,8 @@ f_rbr_single(
 
     bool rallyOK = not needRally or (f_isBullish(o1, c1) and f_isBullish(o3, c3))
     bool jarakOk = f_jarakBaseOk(1, 0.5)
+    bool jarakInOk  = f_jarakBaseLegInOk(1, 0.5)
+    bool jarakOutOk = f_jarakBaseLegOutOk(1, 0.5)
 
     bool baseBodyOk = f_baseBodyOk(1)
     bool polaOk   = okLegIn and okLegOut and okCandle2 and rallyOK and baseBodyOk and (devMode or jarakOk)
@@ -635,16 +658,20 @@ f_rbr_single(
             errCount += 1
             errCodes += "3 "
         else
-            if not okFvgLegIn
+            if not okFvgLegIn and devMode
                 errCount += 1
                 errCodes += "1 "
             if not okFvgLegOut
                 errCount += 1
                 errCodes += "2 "
 
-        if not jarakOk
+        if not jarakInOk
             errCount += 1
             errCodes += "4 "
+
+        if not jarakOutOk
+            errCount += 1
+            errCodes += "11 "
 
         if not f_bodyAvgOk(o1, c1, 3)
             errCount += 1
@@ -678,13 +705,14 @@ f_errDescRbr(string code) =>
         "1"  => "FVG Leg In tidak valid"
         "2"  => "FVG Leg Out tidak valid"
         "3"  => "Tanpa FVG"
-        "4"  => "Jarak base > 50% body leg in/out"
+        "4"  => "Jarak base > 50% body leg in"
         "5"  => "Body leg in < AVG body"
         "6"  => "Body leg out < AVG body"
-        "7"  => "Ekor leg in > body leg in"
-        "8"  => "Ekor leg out > body leg out"
+        "7"  => "Body leg in < 60% tinggi candle"
+        "8"  => "Body leg out < 60% tinggi candle"
         "9"  => "Ekor bawah base menembus ekor bawah leg in"
         "10" => "Ekor atas base melewati ekor atas leg out"
+        "11" => "Jarak base > 50% body leg out"
         => "Kode tidak dikenal"
 
 f_gradeTipRbr(int errCount, string errCodes) =>
@@ -794,6 +822,8 @@ f_rbr_multiple(int minBase, int maxBase, float pct, bool needRally) =>
             if okLegOut and okLegIn and rallyIn and f_baseMultipleRbr(n, pct) and f_baseBodyOk(n) and (devMode or f_jarakBaseOk(n, 0.5))
                 bool okFvgIn  = f_fvg_legin_rbr(high[k + 1], low[n + 1])
                 bool jarakOk  = f_jarakBaseOk(n, 0.5)
+                bool jarakInOk  = f_jarakBaseLegInOk(n, 0.5)
+                bool jarakOutOk = f_jarakBaseLegOutOk(n, 0.5)
                 bool tanpaFvg = not okFvgIn and not okFvgOut
 
                 if not tanpaFvg or inputSensitifitas == 'LOW'
@@ -803,16 +833,20 @@ f_rbr_multiple(int minBase, int maxBase, float pct, bool needRally) =>
                         errCount += 1
                         errCodes += "3 "
                     else
-                        if not okFvgIn
+                        if not okFvgIn and devMode
                             errCount += 1
                             errCodes += "1 "
                         if not okFvgOut
                             errCount += 1
                             errCodes += "2 "
 
-                    if not jarakOk
+                    if not jarakInOk
                         errCount += 1
                         errCodes += "4 "
+
+                    if not jarakOutOk
+                        errCount += 1
+                        errCodes += "11 "
 
                     if not f_bodyAvgOk(open[k], close[k], k)
                         errCount += 1
