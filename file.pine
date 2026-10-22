@@ -1,5 +1,5 @@
 //@version=5
-indicator("7Seas_PAC (v1.3)", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=200)
+indicator("7Seas_PAC (v1.4)", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=200)
 
 // =====================================================================
 //  INPUT
@@ -42,6 +42,7 @@ showLastSH   = input.bool(true, "Show Swing High Control Line", group="Swing Ind
 showLastSL    = input.bool(true, "Show Swing Low Control Line", group="Swing Indicator")
 show618 = input.bool(false, "Show 61.8% Line", group="Swing Indicator")
 swingBasis = input.string("Wick", "Swing High/Low Source", options=["Body", "Wick"], group="Swing Indicator")
+swingAtrMult = 2.0
 
 showDbdSingle   = true
 showRbrSingle = true
@@ -1174,6 +1175,7 @@ var array<float> loArr   = array.new<float>()   // dasar ekor (low)
 var array<float> shArr   = array.new<float>()   // harga untuk Swing High
 var array<float> slArr   = array.new<float>()   // harga untuk Swing Low
 var array<int>   timeArr = array.new<int>()
+var array<float> atrArr  = array.new<float>()   // ATR tiap bar
 var array<label> swingLabels = array.new<label>()
 var array<line>  zzLines     = array.new<line>()
 var line lastSHLine = na
@@ -1283,6 +1285,7 @@ while topArr.size() <= bar_index
     slArr.push(0.0)
     timeArr.push(0)
     clsArr.push(0.0)
+    atrArr.push(0.0)
 
 topArr.set(bar_index, math.max(open, close))
 botArr.set(bar_index, math.min(open, close))
@@ -1292,6 +1295,7 @@ shArr.set(bar_index, swingBasis == "Body" ? math.max(open, close) : high)
 slArr.set(bar_index, swingBasis == "Body" ? math.min(open, close) : low)
 timeArr.set(bar_index, time)
 clsArr.set(bar_index, close)
+atrArr.set(bar_index, nz(ta.atr(14)))
 
 // daftarkan zona baru
 while zDead.size() < zTop.size()
@@ -1461,7 +1465,7 @@ if barstate.islast
                     if botB < oppP
                         oppP   := botB
                         oppIdx := idx
-                    if oppIdx - extIdx >= swingMinBars and f_validSH(topArr, botArr, extIdx, idx)
+                    if (oppIdx - extIdx >= swingMinBars and f_validSH(topArr, botArr, extIdx, idx)) or (swingAtrMult > 0 and oppIdx > extIdx and extP - oppP >= swingAtrMult * atrArr.get(extIdx))
                         swP.push(extP)
                         swIdx.push(extIdx)
                         swT.push(1)
@@ -1484,7 +1488,7 @@ if barstate.islast
                     if topB > oppP
                         oppP   := topB
                         oppIdx := idx
-                    if oppIdx - extIdx >= swingMinBars and f_validSL(topArr, botArr, clsArr, extIdx, idx)
+                    if (oppIdx - extIdx >= swingMinBars and f_validSL(topArr, botArr, clsArr, extIdx, idx)) or (swingAtrMult > 0 and oppIdx > extIdx and oppP - extP >= swingAtrMult * atrArr.get(extIdx))
                         swP.push(extP)
                         swIdx.push(extIdx)
                         swT.push(-1)
