@@ -1,5 +1,5 @@
 //@version=5
-indicator("7Seas_PAC (v1.1)", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=200)
+indicator("7Seas_PAC (v1.3)", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=200)
 
 // =====================================================================
 //  INPUT
@@ -15,48 +15,51 @@ markerColor = color.yellow
 showArrow = true
 
 // group AVG Body
-limitCandleAvg = input.int(100,"Berapa jumlah candle stick utk AVG Body (terhitung dri candle) ?",minval=1,step=1,group="Avg Body")
+limitCandleAvg = input.int(100,"Avg Body Lookback (Candles)",minval=1,step=1,group="UFO / BASE")
 
 inputSensitifitas = input.string(
      "LOW",
-     "Pilih Sensitifitas",
+     "Select Sensitivity",
      options = ["LOW", "MEDIUM", "HIGH"],
-     group = "Sensitifitas")
+     group = "UFO / BASE")
+
+
+
+jmlLabel       = 100
+geserKiri      = 0
+
+// group Swing
+showSwing     = input.bool(true, "Show ZigZag Lines", group="Swing Indicator")
+// swingLookback = input.int(200, "Lookback (jumlah candle)", minval=20, group="Swing")
+swingMinBars  = 3
+swingHighCol  = color.red
+swingLowCol   = color.lime
+zzLineCol     = chart.fg_color
+lastSHLineCol = color.rgb(255, 105, 180)
+lastSLLineCol = color.lime
+
+showLastSH   = input.bool(true, "Show Swing High Control Line", group="Swing Indicator")
+showLastSL    = input.bool(true, "Show Swing Low Control Line", group="Swing Indicator")
+show618 = input.bool(false, "Show 61.8% Line", group="Swing Indicator")
+swingBasis = input.string("Wick", "Swing High/Low Source", options=["Body", "Wick"], group="Swing Indicator")
+
+showDbdSingle   = true
+showRbrSingle = true
+showDbdMultiple = true
+showRbrMultiple = true
+// backtestMode = input.bool(true, "Backtest Mode (buang zona yang sudah tersentuh harga)", group="Penanda")
+
+inputMinGrade = input.string("K", "Min. Grade to Show", options=["A","B","C","D","E","F","G","H","I","J","K"], group="UFO / BASE", tooltip="Pilih C: tampil C, B, A. Pilih B: tampil B, A. K = tampilkan semua.")
+inputTinggiBodyBase = input.bool(true, "Base Body Height vs. Leg In/Out (Base Body Must Not Be Larger)", group="UFO / BASE")
+
+// group Fibonacci
+fibTopCol = input.color(color.rgb(255, 105, 180), "Upper Zone Color (Swing High Control Line)", group="Swing Indicator")
+fibBotCol = input.color(color.lime, "Lower Zone Color (Swing Low Control Line)", group="Swing Indicator")
 
 showDebugLegin = input.bool(false, "DEBUG", group="Debug")
 devMode = input.bool(false, "DEV MODE", group="Debug", tooltip="Centang:\n- Error kode 4 (jarak base > 50% body leg in) dan kode 11 (jarak base > 50% body leg out) TIDAK mandatory, hanya jadi pengurang grade.\n- Error kode 7 dan 8 (body leg in/out < 60% tinggi candle) TIDAK mandatory, hanya jadi pengurang grade.\n- Error kode 1 (FVG Leg In tidak valid) ikut dihitung sebagai pengurang grade.\n- Validasi harga ketutup di kanan DINONAKTIFKAN (zona langsung digambar).\n\nUncheck:\n- Error kode 4 dan 11 MANDATORY.\n- Error kode 7 dan 8 MANDATORY (pola dibuang kalau body leg in/out < 60% tinggi candle).\n- Error kode 1 (FVG Leg In tidak valid) TIDAK dihitung sebagai skor.\n- Validasi harga ketutup di kanan AKTIF (zona yang sudah tersentuh harga dibuang, garis control hanya memakai zona yang masih aktif).")
 bool backtestMode = not devMode   // validasi harga ketutup AKTIF saat devMode uncheck
 
-jmlLabel       = input.int(100, "Jumlah label debug", minval=1, maxval=400, group="Debug")
-geserKiri      = input.int(0, "Geser ke kiri (jumlah bar)", minval=0, group="Debug")
-
-// group Swing
-showSwing     = input.bool(true, "Tampilkan Zigzag Swing", group="Swing")
-// swingLookback = input.int(200, "Lookback (jumlah candle)", minval=20, group="Swing")
-swingMinBars  = 3
-swingHighCol  = color.red
-swingLowCol   = color.lime
-zzLineCol     = color.white
-lastSHLineCol = color.rgb(255, 105, 180)
-lastSLLineCol = color.lime
-
-showLastSH   = input.bool(true, "Garis horizontal Swing High terakhir", group="Swing")
-showLastSL    = input.bool(true, "Garis horizontal Swing Low terakhir (RBR)", group="Swing")
-swingBasis = input.string("Ekor", "Swing High/Low diambil dari", options=["Body", "Ekor"], group="Swing")
-show618 = input.bool(false, "Garis 61.8%", group="Swing")
-
-showDbdSingle   = input.bool(true, "Tampilkan DBD Single", group="Penanda")
-showRbrSingle = input.bool(true, "Tampilkan RBR Single", group="Penanda")
-showDbdMultiple = input.bool(true, "Tampilkan DBD Multiple", group="Penanda")
-showRbrMultiple = input.bool(true, "Tampilkan RBR Multiple", group="Penanda")
-// backtestMode = input.bool(true, "Backtest Mode (buang zona yang sudah tersentuh harga)", group="Penanda")
-
-inputMinGrade = input.string("K", "Grade minimum yang ditampilkan", options=["A","B","C","D","E","F","G","H","I","J","K"], group="Sensitifitas", tooltip="Pilih C: tampil C, B, A. Pilih B: tampil B, A. K = tampilkan semua.")
-inputTinggiBodyBase = input.bool(true, "Tinggi body base vs legin/legout (body base tidak boleh lebih besar)", group="Base")
-
-// group Fibonacci
-fibTopCol = input.color(color.rgb(255, 105, 180), "Warna zona atas (dari garis Control SH)", group="Fibonacci")
-fibBotCol = input.color(color.lime, "Warna zona bawah (dari garis Control RBR)", group="Fibonacci")
 
 var box   fibTopBox = na
 var box   fibBotBox = na
@@ -1530,8 +1533,16 @@ if barstate.islast
         if not na(lastSHIdx) and lastSHIdx > 0
             int i = lastSHIdx - 1
             while i >= 0
-                // range ekor (low..high) sudah mencakup body
-                if pinkPrice >= loArr.get(i) and pinkPrice <= hiArr.get(i)
+                // harga garis ada di dalam range ekor candle i
+                bool inRangeP = pinkPrice >= loArr.get(i) and pinkPrice <= hiArr.get(i)
+
+                // harga garis jatuh di gap kosong antara candle i dan i+1
+                bool gapP = false
+                if i + 1 <= bar_index
+                    gapP := (pinkPrice > hiArr.get(i) and pinkPrice < loArr.get(i + 1)) or
+                         (pinkPrice < loArr.get(i) and pinkPrice > hiArr.get(i + 1))
+
+                if inRangeP or gapP
 
                     // leg in DBD = bagian pola, bukan base, dan candle kanannya adalah base
                     bool isLegIn  = patFlag.get(i) == 1 and baseFlag.get(i) == 0 and i + 1 < baseFlag.size() and baseFlag.get(i + 1) == 1
@@ -1550,13 +1561,13 @@ if barstate.islast
                                 break
                             jbP -= 1
 
-                    if f_baseAktif(i)
+                    if inRangeP and f_baseAktif(i)
                         // skenario 1: kena base DBD aktif
                         pinkPrice := f_baseTopAt(i)
                         pinkValid := true
                         hitIdx    := i
                         break
-                    else if isLegIn and kiriBase
+                    else if inRangeP and isLegIn and kiriBase
                         // skenario 2: kena leg in DBD, dan candle di kirinya adalah base
                         pinkPrice := f_baseTopAt(i - 1)
                         pinkValid := true
@@ -1564,22 +1575,24 @@ if barstate.islast
                         viaLegIn  := true
                         legInIdx  := i
                         break
-                    else if isLegOutP and not na(baseHitP)
+                    else if inRangeP and isLegOutP and not na(baseHitP)
                         // skenario 3: kena leg out DBD, dan garis juga menyentuh base di area ini
                         pinkPrice := f_baseTopAt(baseHitP)
                         pinkValid := true
                         hitIdx    := baseHitP
                         break
                     else
-                        // aturan baru: kalau cuma kena ekor (bukan body), lanjut telusuri ke kiri
-                        bool kenaBodyP = pinkPrice >= botArr.get(i) and pinkPrice <= topArr.get(i)
+                        // kena gap kosong dianggap body. Kalau cuma kena ekor, lanjut telusuri ke kiri
+                        bool kenaBodyP = gapP or (pinkPrice >= botArr.get(i) and pinkPrice <= topArr.get(i))
                         if not kenaBodyP
                             i -= 1
                             continue
-                        
+
                         // alasan singkat kenapa puncak ini dilewati
                         string alasanP = ""
-                        if baseFlag.get(i) == 1
+                        if gapP and not inRangeP
+                            alasanP := "kena gap kosong (dianggap body)"
+                        else if baseFlag.get(i) == 1
                             alasanP := "kena base DBD yang sudah mati"
                         else if isLegIn
                             alasanP := "kena leg in DBD, tapi candle kirinya bukan base aktif"
@@ -1694,8 +1707,16 @@ if barstate.islast
         if not na(lastSLIdx) and lastSLIdx > 0
             int i = lastSLIdx - 1
             while i >= 0
-                // range ekor (low..high) sudah mencakup body
-                if greenPrice >= loArr.get(i) and greenPrice <= hiArr.get(i)
+                // harga garis ada di dalam range ekor candle i
+                bool inRangeG = greenPrice >= loArr.get(i) and greenPrice <= hiArr.get(i)
+
+                // harga garis jatuh di gap kosong antara candle i dan i+1
+                bool gapG = false
+                if i + 1 <= bar_index
+                    gapG := (greenPrice > hiArr.get(i) and greenPrice < loArr.get(i + 1)) or
+                         (greenPrice < loArr.get(i) and greenPrice > hiArr.get(i + 1))
+
+                if inRangeG or gapG
 
                     // leg in RBR = bagian pola, bukan base, dan candle kanannya adalah base
                     bool isLegInG  = rbrPat.get(i) == 1 and rbrBaseFlag.get(i) == 0 and i + 1 < rbrBaseFlag.size() and rbrBaseFlag.get(i + 1) == 1
@@ -1714,13 +1735,13 @@ if barstate.islast
                                 break
                             jb -= 1
 
-                    if f_baseAktifRbr(i)
+                    if inRangeG and f_baseAktifRbr(i)
                         // skenario 1: kena base RBR aktif
                         greenPrice := f_baseBottomAt(i)
                         greenValid := true
                         hitIdxG    := i
                         break
-                    else if isLegInG and kiriBaseG
+                    else if inRangeG and isLegInG and kiriBaseG
                         // skenario 2: kena leg in RBR, dan candle di kirinya adalah base
                         greenPrice := f_baseBottomAt(i - 1)
                         greenValid := true
@@ -1728,23 +1749,24 @@ if barstate.islast
                         viaLegInG  := true
                         legInIdxG  := i
                         break
-                    else if isLegOutG and not na(baseHitG)
+                    else if inRangeG and isLegOutG and not na(baseHitG)
                         // skenario 3: kena leg out RBR, dan garis juga menyentuh base di area ini
                         greenPrice := f_baseBottomAt(baseHitG)
                         greenValid := true
                         hitIdxG    := baseHitG
                         break
                     else
-
-                        // aturan baru: kalau cuma kena ekor (bukan body), lanjut telusuri ke kiri
-                        bool kenaBodyG = greenPrice >= botArr.get(i) and greenPrice <= topArr.get(i)
+                        // kena gap kosong dianggap body. Kalau cuma kena ekor, lanjut telusuri ke kiri
+                        bool kenaBodyG = gapG or (greenPrice >= botArr.get(i) and greenPrice <= topArr.get(i))
                         if not kenaBodyG
                             i -= 1
                             continue
 
                         // alasan singkat kenapa lembah ini dilewati
                         string alasan = ""
-                        if rbrBaseFlag.get(i) == 1
+                        if gapG and not inRangeG
+                            alasan := "kena gap kosong (dianggap body)"
+                        else if rbrBaseFlag.get(i) == 1
                             alasan := "kena base RBR yang sudah mati"
                         else if isLegInG
                             alasan := "kena leg in RBR, tapi candle kirinya bukan base aktif"
@@ -1908,7 +1930,7 @@ if barstate.islast
                          x1 = x,                    y1 = p618,
                          x2 = x + barDurMs * 2,     y2 = p618,
                          xloc  = xloc.bar_time,
-                         color = color.white,
+                         color = chart.fg_color,
                          width = 1))
 
                 
@@ -1923,5 +1945,5 @@ if barstate.islast
                          x1 = x,                    y1 = p618Up,
                          x2 = x + barDurMs * 2,     y2 = p618Up,
                          xloc  = xloc.bar_time,
-                         color = color.white,
+                         color = chart.fg_color,
                          width = 1))
