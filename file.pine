@@ -1,5 +1,5 @@
 //@version=5
-indicator("7Seas_PAC", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=200)
+indicator("7Seas_PAC (v1.1)", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=200)
 
 // =====================================================================
 //  INPUT
@@ -11,7 +11,8 @@ reqDrop = true
 
 // Group Penanda
 markerColor = color.yellow
-showArrow = input.bool(true, "Tampilkan Panah", group="Penanda")
+// showArrow = input.bool(true, "Tampilkan Panah", group="Penanda")
+showArrow = true
 
 // group AVG Body
 limitCandleAvg = input.int(100,"Berapa jumlah candle stick utk AVG Body (terhitung dri candle) ?",minval=1,step=1,group="Avg Body")
@@ -1570,6 +1571,12 @@ if barstate.islast
                         hitIdx    := baseHitP
                         break
                     else
+                        // aturan baru: kalau cuma kena ekor (bukan body), lanjut telusuri ke kiri
+                        bool kenaBodyP = pinkPrice >= botArr.get(i) and pinkPrice <= topArr.get(i)
+                        if not kenaBodyP
+                            i -= 1
+                            continue
+                        
                         // alasan singkat kenapa puncak ini dilewati
                         string alasanP = ""
                         if baseFlag.get(i) == 1
@@ -1728,6 +1735,13 @@ if barstate.islast
                         hitIdxG    := baseHitG
                         break
                     else
+
+                        // aturan baru: kalau cuma kena ekor (bukan body), lanjut telusuri ke kiri
+                        bool kenaBodyG = greenPrice >= botArr.get(i) and greenPrice <= topArr.get(i)
+                        if not kenaBodyG
+                            i -= 1
+                            continue
+
                         // alasan singkat kenapa lembah ini dilewati
                         string alasan = ""
                         if rbrBaseFlag.get(i) == 1
@@ -1893,6 +1907,21 @@ if barstate.islast
                     zzLines.push(line.new(
                          x1 = x,                    y1 = p618,
                          x2 = x + barDurMs * 2,     y2 = p618,
+                         xloc  = xloc.bar_time,
+                         color = color.white,
+                         width = 1))
+
+                
+            // Garis 61.8%: leg naik (lembah kiri -> puncak kanan), diukur dari puncak
+            if show618 and k > 0
+                if swT.get(k - 1) == -1 and swT.get(k) == 1
+                    float lembahUp = swP.get(k - 1)
+                    float puncakUp = y
+                    float p618Up   = puncakUp - (puncakUp - lembahUp) * 61.8 / 100
+
+                    zzLines.push(line.new(
+                         x1 = x,                    y1 = p618Up,
+                         x2 = x + barDurMs * 2,     y2 = p618Up,
                          xloc  = xloc.bar_time,
                          color = color.white,
                          width = 1))
