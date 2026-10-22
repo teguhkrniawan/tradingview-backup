@@ -1,0 +1,1267 @@
+//@version=5
+strategy("7Seas_PAC_Strategy (v1.5)", overlay=true,
+     initial_capital=10000, default_qty_type=strategy.fixed, default_qty_value=1,
+     margin_long=0, margin_short=0,
+     calc_on_every_tick=false, process_orders_on_close=false,
+     max_bars_back=500, max_labels_count=500, max_lines_count=500)
+
+// =====================================================================
+//  INPUT
+// =====================================================================
+inputToleransiAvg = 100
+wickPct = 50
+reqDrop = true
+
+// ---- Backtest ----
+startTime = input.time(timestamp("01 Jan 2024 00:00 +0700"), "Mulai backtest", group="Backtest")
+
+// ---- Strategi ----
+useSell       = input.bool(true, "Aktifkan SELL (DBD)", group="Strategi")
+useBuy        = input.bool(true, "Aktifkan BUY (RBR)", group="Strategi")
+use618        = input.bool(true, "Aktifkan garis 61.8%", group="Strategi")
+cekBeatSwing  = input.bool(true, "Swing harus mengalahkan swing sejenis sebelumnya", group="Strategi", tooltip="SELL: swing low baru harus lebih rendah dari swing low sebelumnya.\nBUY: swing high baru harus lebih tinggi dari swing high sebelumnya.\nKalau belum, setup dianggap tidak valid dan DBD/RBR tidak di-scan.")
+cekKonfirmasi = input.bool(true, "Swing harus punya candle close konfirmasi", group="Strategi", tooltip="SELL: setelah swing low harus ada N candle yang CLOSE-nya di atas HIGH candle swing low.\nBUY: setelah swing high harus ada N candle yang CLOSE-nya di bawah LOW candle swing high.")
+nKonfirmasi   = input.int(2, "Jumlah candle close konfirmasi", minval=1, group="Strategi")
+useBase       = input.bool(true, "Garis kena BASE = valid", group="Strategi")
+useLegIn      = input.bool(true, "Garis kena LEG IN (base di kirinya) = valid", group="Strategi")
+useLegOut     = input.bool(true, "Garis kena LEG OUT (garis juga kena base) = valid", group="Strategi")
+buangZonaMati = input.bool(true, "Buang zona yang sudah tersentuh body harga", group="Strategi", tooltip="Dicentang: zona yang sudah ketutup body harga tidak dipakai (disarankan untuk trading). Uncheck: zona mati tetap dianggap valid, seperti perilaku indikator saat DEV MODE ON.")
+pipBuffer     = input.float(8.0, "Buffer SL (pip)", minval=0, group="Strategi")
+rrMult        = input.float(2.0, "Pengali TP (x risiko)", minval=0.1, group="Strategi")
+pipOverride   = input.float(0.0, "Ukuran 1 pip dalam harga (0 = otomatis)", minval=0, group="Strategi", tooltip="Otomatis: JPY=0.01, XAU=1.0 (sama dengan f_convertPip di indikator), lainnya=0.0001")
+maxScan       = input.int(300, "Scan ke kiri maksimal (bar)", minval=10, group="Strategi")
+maxWait       = input.int(100, "Batalkan order limit setelah N bar", minval=1, group="Strategi")
+
+// ---- Debug ----
+showDebug     = input.bool(true, "Debug label: kapan garis 61.8 kena DBD / RBR", group="Debug")
+showDebugMiss = input.bool(false, "Debug label juga untuk yang TIDAK kena apa pun", group="Debug")
+devMode       = input.bool(true, "DEV MODE", group="Debug", tooltip="Sama seperti indikator v1.5.\nCentang: kode error 4, 7, 8, 11 tidak mandatory, hanya jadi pengurang grade.\nUncheck: kode error 4, 7, 8, 11 mandatory.")
+
+// ---- UFO / BASE ----
+limitCandleAvg    = input.int(100, "Avg Body Lookback (Candles)", minval=1, step=1, group="UFO / BASE")
+inputSensitifitas = input.string("LOW", "Select Sensitivity", options=["LOW", "MEDIUM", "HIGH"], group="UFO / BASE")
+inputMinGrade     = input.string("C", "Min. Grade to Use", options=["A","B","C","D","E","F","G","H","I","J","K"], group="UFO / BASE", tooltip="Pilih C: pakai C, B, A. K = semua grade.")
+inputTinggiBodyBase = input.bool(true, "Base Body Height vs. Leg In/Out (Base Body Must Not Be Larger)", group="UFO / BASE")
+
+// ---- Swing ----
+swingBasis   = input.string("Wick", "Swing High/Low Source", options=["Body", "Wick"], group="Swing Indicator")
+swingAtrMult = input.float(2.0, "Konfirmasi swing alternatif (x ATR, 0 = mati)", minval=0.0, step=0.5, group="Swing Indicator")
+swingMinBars = 3
+
+showDbdSingle   = true
+showDbdMultiple = true
+showRbrSingle   = true
+showRbrMultiple = true
+
+if inputSensitifitas == "MEDIUM"
+    wickPct := 60
+if inputSensitifitas == "HIGH"
+    wickPct := 70
+
+MIN_BASE_T5 = 2
+MAX_BASE_T5 = 6
+
+// =====================================================================
+//  FUNGSI DASAR
+// =====================================================================
+f_body(float o, float c) =>
+    math.abs(c - o)
+
+f_upperWick(float o, float h, float c) =>
+    h - math.max(o, c)
+
+f_lowerWick(float o, float l, float c) =>
+    math.min(o, c) - l
+
+f_totalWick(float o, float h, float l, float c) =>
+    f_upperWick(o, h, c) + f_lowerWick(o, l, c)
+
+f_isDrop(float o, float c) =>
+    c <= o
+
+f_isBullish(float o, float c) =>
+    c >= o
+
+f_convertPip(float angka) =>
+    float hasil = 0.0
+    if str.contains(syminfo.ticker, "JPY")
+        hasil := math.round(angka * 100)
+    else if str.contains(syminfo.ticker, "XAU")
+        hasil := math.round(angka * 1)
+    else
+        hasil := math.round(angka * 10000)
+    hasil
+
+f_pipSize() =>
+    float s = 0.0001
+    if pipOverride > 0
+        s := pipOverride
+    else if str.contains(syminfo.ticker, "JPY")
+        s := 0.01
+    else if str.contains(syminfo.ticker, "XAU")
+        s := 1.0
+    s
+
+f_avgBodyInPrice(int limitCandle, string mode, int offset) =>
+    float totalBody = 0.0
+    int   count     = 0
+    if mode == 'dbd'
+        for i = 1 + offset to limitCandle + offset
+            float body = math.abs(close[i] - open[i])
+            float ekor = f_totalWick(open[i], high[i], low[i], close[i])
+            if body > ekor
+                totalBody += body
+                count += 1
+    count > 0 ? totalBody / count : 0.0
+
+f_wickVsBody(float o, float h, float l, float c, float pct, offset) =>
+    if f_convertPip(f_body(o, c)) < f_convertPip(f_avgBodyInPrice(limitCandleAvg, 'dbd', offset))
+        true
+    else if f_convertPip(f_totalWick(o, h, l, c)) >= f_convertPip(f_body(o, c))
+        true
+    else if f_isBullish(o, c) and f_convertPip(f_body(o, c)) > f_convertPip(f_totalWick(o, h, l, c))
+        true
+    else
+        false
+
+f_wickVsBodySingle(float o, float h, float l, float c, float pct, int offset) =>
+    f_convertPip(f_body(o, c)) < f_convertPip(f_avgBodyInPrice(limitCandleAvg, 'dbd', offset)) or
+     f_convertPip(f_totalWick(o, h, l, c)) >= f_convertPip(f_body(o, c)) or
+     (f_isBullish(o, c) and f_convertPip(f_body(o, c)) > f_convertPip(f_totalWick(o, h, l, c)))
+
+f_wickVsBodyBaseRbr(float o, float h, float l, float c, float pct, int offset) =>
+    f_convertPip(f_body(o, c)) < f_convertPip(f_avgBodyInPrice(limitCandleAvg, 'dbd', offset)) or
+     f_convertPip(f_totalWick(o, h, l, c)) >= f_convertPip(f_body(o, c)) or
+     (f_isBullish(o, c) and f_convertPip(f_body(o, c)) > f_convertPip(f_totalWick(o, h, l, c)))
+
+f_wickVsBodySingleRbr(float o, float h, float l, float c, float pct, int offset) =>
+    f_convertPip(f_body(o, c)) < f_convertPip(f_avgBodyInPrice(limitCandleAvg, 'dbd', offset)) or
+     f_convertPip(f_totalWick(o, h, l, c)) >= f_convertPip(f_body(o, c)) or
+     (f_isDrop(o, c) and f_convertPip(f_body(o, c)) > f_convertPip(f_totalWick(o, h, l, c)))
+
+// ---- base DBD ----
+f_baseAtasOk(int nBase) =>
+    float openLegIn = open[nBase + 2]
+    bool ok = true
+    for j = 2 to nBase + 1
+        if high[j] > openLegIn
+            ok := false
+    ok
+
+f_baseBawahOk(int nBase) =>
+    float lowLegOut = low[1]
+    bool ok = true
+    for j = 2 to nBase + 1
+        if low[j] < lowLegOut
+            ok := false
+    ok
+
+f_baseMultiple(int nBase, float pct) =>
+    bool perCandleOk = true
+    for j = 2 to nBase + 1
+        bool wickOk = f_wickVsBody(open[j], high[j], low[j], close[j], pct, j)
+        if not wickOk
+            perCandleOk := false
+    perCandleOk
+
+// ---- base RBR ----
+f_baseMultipleRbr(int nBase, float pct) =>
+    bool ok = true
+    for j = 2 to nBase + 1
+        if not f_wickVsBodyBaseRbr(open[j], high[j], low[j], close[j], pct, j)
+            ok := false
+    ok
+
+f_baseBawahRbrOk(int nBase) =>
+    float lowLegIn = low[nBase + 2]
+    bool ok = true
+    for j = 2 to nBase + 1
+        if low[j] < lowLegIn
+            ok := false
+    ok
+
+f_baseAtasRbrOk(int nBase) =>
+    float highLegOut = high[1]
+    bool ok = true
+    for j = 2 to nBase + 1
+        if high[j] > highLegOut
+            ok := false
+    ok
+
+// ---- umum ----
+f_jarakBase(int nBase) =>
+    float puncak = na
+    float dasar  = na
+    for j = 2 to nBase + 1
+        float atasBody  = math.max(open[j], close[j])
+        float bawahBody = math.min(open[j], close[j])
+        puncak := na(puncak) ? atasBody  : math.max(puncak, atasBody)
+        dasar  := na(dasar)  ? bawahBody : math.min(dasar,  bawahBody)
+    puncak - dasar
+
+f_jarakBaseOk(int nBase, float maxRasio) =>
+    float jarak      = f_jarakBase(nBase)
+    float bodyLegIn  = f_body(open[nBase + 2], close[nBase + 2])
+    float bodyLegOut = f_body(open[1], close[1])
+    jarak <= bodyLegIn * maxRasio and jarak <= bodyLegOut * maxRasio
+
+f_jarakBaseLegInOk(int nBase, float maxRasio) =>
+    f_jarakBase(nBase) <= f_body(open[nBase + 2], close[nBase + 2]) * maxRasio
+
+f_jarakBaseLegOutOk(int nBase, float maxRasio) =>
+    f_jarakBase(nBase) <= f_body(open[1], close[1]) * maxRasio
+
+f_baseBodyOk(int nBase) =>
+    bool ok = true
+    if inputTinggiBodyBase
+        float bodyLegIn  = f_body(open[nBase + 2], close[nBase + 2])
+        float bodyLegOut = f_body(open[1], close[1])
+        for j = 2 to nBase + 1
+            float bodyBase = f_body(open[j], close[j])
+            if bodyBase > bodyLegIn or bodyBase > bodyLegOut
+                ok := false
+    ok
+
+f_baseTop(int nBase) =>
+    float t = high[2]
+    for j = 3 to nBase + 1
+        t := math.max(t, high[j])
+    t
+
+f_baseBottom(int nBase) =>
+    float b = low[2]
+    for j = 3 to nBase + 1
+        b := math.min(b, low[j])
+    b
+
+f_bodyAvgOk(float o, float c, int offset) =>
+    f_convertPip(f_body(o, c)) >= f_convertPip(f_avgBodyInPrice(limitCandleAvg, 'dbd', offset))
+
+f_legInBodyOk(float o, float h, float l, float c) =>
+    float tinggi = h - l
+    tinggi > 0 and f_body(o, c) >= tinggi * 0.6
+
+f_legOutBodyOk(float o, float h, float l, float c) =>
+    float tinggi = h - l
+    tinggi > 0 and f_body(o, c) >= tinggi * 0.6
+
+f_gradeText(int errCount) =>
+    int idx = math.min(errCount, 25)
+    str.substring("ABCDEFGHIJKLMNOPQRSTUVWXYZ", idx, idx + 1)
+
+// =====================================================================
+//  LEG & FVG - DBD (bearish)
+// =====================================================================
+f_legIn_valid(float o, float h, float l, float c, float toleransi_persen, string mode, int offset) =>
+    if mode == 'dbd' and inputSensitifitas == 'HIGH'
+        f_isDrop(o, c) and (devMode or f_legInBodyOk(o, h, l, c))
+    else if mode == 'dbd' and inputSensitifitas == 'MEDIUM'
+        f_isDrop(o, c) and (devMode or f_legInBodyOk(o, h, l, c))
+    else if mode == 'dbd' and inputSensitifitas == 'LOW'
+        f_isDrop(o, c) and (devMode or f_legInBodyOk(o, h, l, c))
+    else
+        false
+
+f_fvg_legin_dbd(float lowLeftLegIn, float highRightLegIn) =>
+    lowLeftLegIn > highRightLegIn
+
+f_fvg_legout_dbd(float lowLeftLegOut, float highRightLegOut) =>
+    lowLeftLegOut > highRightLegOut
+
+f_legOut_valid(float o, float h, float l, float c, float openLegIn, float closeLegIn, float toleransi_persen, string mode, int offset) =>
+    bool posisiOk = c < closeLegIn and o < openLegIn
+    if mode == 'dbd' and inputSensitifitas == 'HIGH'
+        f_isDrop(o, c) and f_body(o, c) > f_totalWick(o, h, l, c) and posisiOk
+    else if mode == 'dbd' and inputSensitifitas == 'MEDIUM'
+        f_isDrop(o, c) and f_body(o, c) >= f_totalWick(o, h, l, c) and posisiOk
+    else if mode == 'dbd' and inputSensitifitas == 'LOW'
+        f_isDrop(o, c) and posisiOk and (devMode or f_legOutBodyOk(o, h, l, c))
+    else
+        false
+
+// =====================================================================
+//  LEG & FVG - RBR (bullish)
+// =====================================================================
+f_fvg_legin_rbr(float highLeftLegIn, float lowRightLegIn) =>
+    highLeftLegIn < lowRightLegIn
+
+f_fvg_legout_rbr(float highLeftLegOut, float lowRightLegOut) =>
+    highLeftLegOut < lowRightLegOut
+
+f_legIn_valid_rbr(float o, float h, float l, float c) =>
+    if inputSensitifitas == 'HIGH'
+        f_isBullish(o, c) and f_body(o, c) > f_totalWick(o, h, l, c)
+    else if inputSensitifitas == 'MEDIUM'
+        f_isBullish(o, c) and f_body(o, c) >= f_totalWick(o, h, l, c)
+    else
+        f_isBullish(o, c) and (devMode or f_legInBodyOk(o, h, l, c))
+
+f_legOut_valid_rbr(float o, float h, float l, float c, float openLegIn, float closeLegIn) =>
+    bool posisiOk = c > closeLegIn and o > openLegIn
+    if inputSensitifitas == 'HIGH'
+        f_isBullish(o, c) and f_body(o, c) > f_totalWick(o, h, l, c) and posisiOk
+    else if inputSensitifitas == 'MEDIUM'
+        f_isBullish(o, c) and f_body(o, c) >= f_totalWick(o, h, l, c) and posisiOk
+    else
+        f_isBullish(o, c) and posisiOk and (devMode or f_legOutBodyOk(o, h, l, c))
+
+// =====================================================================
+//  DBD MULTIPLE   Return: [n base, jumlah error, kode error]
+// =====================================================================
+f_dbd_multiple(int minBase, int maxBase, float pct, bool needDrop) =>
+    int    nFound   = 0
+    int    errCount = 0
+    string errCodes = ""
+
+    bool dropOut = not needDrop or f_isDrop(open[1], close[1])
+
+    if dropOut
+        bool okFvgOut = f_fvg_legout_dbd(low[2], high[0])
+
+        for n = minBase to maxBase
+            int k = n + 2
+
+            bool okLegOut = f_legOut_valid(
+                 open[1], high[1], low[1], close[1],
+                 open[k], close[k],
+                 inputToleransiAvg, 'dbd', 1)
+
+            bool okLegIn = f_legIn_valid(
+                 open[k], high[k], low[k], close[k],
+                 inputToleransiAvg, 'dbd', k)
+            bool dropIn = not needDrop or f_isDrop(open[k], close[k])
+
+            if okLegOut and okLegIn and dropIn and f_baseMultiple(n, pct) and f_baseBodyOk(n) and (devMode or f_jarakBaseOk(n, 0.5))
+                bool okFvgIn    = f_fvg_legin_dbd(low[k + 1], high[n + 1])
+                bool jarakInOk  = f_jarakBaseLegInOk(n, 0.5)
+                bool jarakOutOk = f_jarakBaseLegOutOk(n, 0.5)
+                bool tanpaFvg   = not okFvgIn and not okFvgOut
+
+                if not tanpaFvg or inputSensitifitas == 'LOW'
+                    nFound := n
+
+                    if not okFvgOut
+                        errCount += 1
+                        errCodes += "2 "
+                    if not jarakInOk
+                        errCount += 1
+                        errCodes += "4 "
+                    if not jarakOutOk
+                        errCount += 1
+                        errCodes += "11 "
+                    if not f_bodyAvgOk(open[k], close[k], k)
+                        errCount += 1
+                        errCodes += "5 "
+                    if not f_bodyAvgOk(open[1], close[1], 1)
+                        errCount += 1
+                        errCodes += "6 "
+                    if not f_legInBodyOk(open[k], high[k], low[k], close[k])
+                        errCount += 1
+                        errCodes += "7 "
+                    if not f_legOutBodyOk(open[1], high[1], low[1], close[1])
+                        errCount += 1
+                        errCodes += "8 "
+                    if not f_baseAtasOk(n)
+                        errCount += 1
+                        errCodes += "9 "
+                    if not f_baseBawahOk(n)
+                        errCount += 1
+                        errCodes += "10 "
+                    break
+
+    [nFound, errCount, str.trim(errCodes)]
+
+// =====================================================================
+//  DBD SINGLE   Return: [valid, jumlah error, kode error]
+// =====================================================================
+f_dbd_single(
+     float o1, float h1, float l1, float c1,
+     float o2, float h2, float l2, float c2,
+     float o3, float h3, float l3, float c3,
+     float lowLeftFvgLegIn,
+     float highRightFvgLegIn,
+     float lowLeftFvgLegOut,
+     float highRightFvgLegOut,
+     bool needDrop,
+     float wickPctIn) =>
+
+    bool okLegIn   = f_legIn_valid(o1, h1, l1, c1, inputToleransiAvg, 'dbd', 3)
+    bool okCandle2 = f_wickVsBodySingle(o2, h2, l2, c2, wickPctIn, 2)
+    bool okLegOut  = f_legOut_valid(o3, h3, l3, c3, o1, c1, inputToleransiAvg, 'dbd', 1)
+
+    bool okFvgLegIn  = f_fvg_legin_dbd(lowLeftFvgLegIn, highRightFvgLegIn)
+    bool okFvgLegOut = f_fvg_legout_dbd(lowLeftFvgLegOut, highRightFvgLegOut)
+
+    bool dropOK = not needDrop or (f_isDrop(o1, c1) and f_isDrop(o3, c3))
+
+    bool jarakOk    = f_jarakBaseOk(1, 0.5)
+    bool jarakInOk  = f_jarakBaseLegInOk(1, 0.5)
+    bool jarakOutOk = f_jarakBaseLegOutOk(1, 0.5)
+
+    bool baseBodyOk = f_baseBodyOk(1)
+    bool polaOk   = okLegIn and okLegOut and okCandle2 and dropOK and baseBodyOk and (devMode or jarakOk)
+    bool tanpaFvg = not okFvgLegIn and not okFvgLegOut
+    bool valid    = polaOk and (not tanpaFvg or inputSensitifitas == 'LOW')
+
+    int    errCount = 0
+    string errCodes = ""
+
+    if valid
+        if not okFvgLegOut
+            errCount += 1
+            errCodes += "2 "
+        if not jarakInOk
+            errCount += 1
+            errCodes += "4 "
+        if not jarakOutOk
+            errCount += 1
+            errCodes += "11 "
+        if not f_bodyAvgOk(o1, c1, 3)
+            errCount += 1
+            errCodes += "5 "
+        if not f_bodyAvgOk(o3, c3, 1)
+            errCount += 1
+            errCodes += "6 "
+        if not f_legInBodyOk(o1, h1, l1, c1)
+            errCount += 1
+            errCodes += "7 "
+        if not f_legOutBodyOk(o3, h3, l3, c3)
+            errCount += 1
+            errCodes += "8 "
+        if h2 > o1
+            errCount += 1
+            errCodes += "9 "
+        if l2 < c3
+            errCount += 1
+            errCodes += "10 "
+
+    [valid, errCount, str.trim(errCodes)]
+
+// =====================================================================
+//  RBR SINGLE   Return: [valid, jumlah error, kode error]
+// =====================================================================
+f_rbr_single(
+     float o1, float h1, float l1, float c1,
+     float o2, float h2, float l2, float c2,
+     float o3, float h3, float l3, float c3,
+     float highLeftFvgLegIn,  float lowRightFvgLegIn,
+     float highLeftFvgLegOut, float lowRightFvgLegOut,
+     bool needRally,
+     float wickPctIn) =>
+
+    bool okLegIn   = f_legIn_valid_rbr(o1, h1, l1, c1)
+    bool okCandle2 = f_wickVsBodySingleRbr(o2, h2, l2, c2, wickPctIn, 2)
+    bool okLegOut  = f_legOut_valid_rbr(o3, h3, l3, c3, o1, c1)
+
+    bool okFvgLegIn  = f_fvg_legin_rbr(highLeftFvgLegIn, lowRightFvgLegIn)
+    bool okFvgLegOut = f_fvg_legout_rbr(highLeftFvgLegOut, lowRightFvgLegOut)
+
+    bool rallyOK    = not needRally or (f_isBullish(o1, c1) and f_isBullish(o3, c3))
+    bool jarakOk    = f_jarakBaseOk(1, 0.5)
+    bool jarakInOk  = f_jarakBaseLegInOk(1, 0.5)
+    bool jarakOutOk = f_jarakBaseLegOutOk(1, 0.5)
+
+    bool baseBodyOk = f_baseBodyOk(1)
+    bool polaOk   = okLegIn and okLegOut and okCandle2 and rallyOK and baseBodyOk and (devMode or jarakOk)
+    bool tanpaFvg = not okFvgLegIn and not okFvgLegOut
+    bool valid    = polaOk and (not tanpaFvg or inputSensitifitas == 'LOW')
+
+    int    errCount = 0
+    string errCodes = ""
+
+    if valid
+        if not okFvgLegOut
+            errCount += 1
+            errCodes += "2 "
+        if not jarakInOk
+            errCount += 1
+            errCodes += "4 "
+        if not jarakOutOk
+            errCount += 1
+            errCodes += "11 "
+        if not f_bodyAvgOk(o1, c1, 3)
+            errCount += 1
+            errCodes += "5 "
+        if not f_bodyAvgOk(o3, c3, 1)
+            errCount += 1
+            errCodes += "6 "
+        if not f_legInBodyOk(o1, h1, l1, c1)
+            errCount += 1
+            errCodes += "7 "
+        if not f_legOutBodyOk(o3, h3, l3, c3)
+            errCount += 1
+            errCodes += "8 "
+        if l2 < l1
+            errCount += 1
+            errCodes += "9 "
+        if h2 > h3
+            errCount += 1
+            errCodes += "10 "
+
+    [valid, errCount, str.trim(errCodes)]
+
+// =====================================================================
+//  RBR MULTIPLE   Return: [n base, jumlah error, kode error]
+// =====================================================================
+f_rbr_multiple(int minBase, int maxBase, float pct, bool needRally) =>
+    int    nFound   = 0
+    int    errCount = 0
+    string errCodes = ""
+
+    bool rallyOut = not needRally or f_isBullish(open[1], close[1])
+
+    if rallyOut
+        bool okFvgOut = f_fvg_legout_rbr(high[2], low[0])
+
+        for n = minBase to maxBase
+            int k = n + 2
+
+            bool okLegOut = f_legOut_valid_rbr(
+                 open[1], high[1], low[1], close[1],
+                 open[k], close[k])
+
+            bool okLegIn  = f_legIn_valid_rbr(open[k], high[k], low[k], close[k])
+            bool rallyIn  = not needRally or f_isBullish(open[k], close[k])
+
+            if okLegOut and okLegIn and rallyIn and f_baseMultipleRbr(n, pct) and f_baseBodyOk(n) and (devMode or f_jarakBaseOk(n, 0.5))
+                bool okFvgIn    = f_fvg_legin_rbr(high[k + 1], low[n + 1])
+                bool jarakInOk  = f_jarakBaseLegInOk(n, 0.5)
+                bool jarakOutOk = f_jarakBaseLegOutOk(n, 0.5)
+                bool tanpaFvg   = not okFvgIn and not okFvgOut
+
+                if not tanpaFvg or inputSensitifitas == 'LOW'
+                    nFound := n
+
+                    if not okFvgOut
+                        errCount += 1
+                        errCodes += "2 "
+                    if not jarakInOk
+                        errCount += 1
+                        errCodes += "4 "
+                    if not jarakOutOk
+                        errCount += 1
+                        errCodes += "11 "
+                    if not f_bodyAvgOk(open[k], close[k], k)
+                        errCount += 1
+                        errCodes += "5 "
+                    if not f_bodyAvgOk(open[1], close[1], 1)
+                        errCount += 1
+                        errCodes += "6 "
+                    if not f_legInBodyOk(open[k], high[k], low[k], close[k])
+                        errCount += 1
+                        errCodes += "7 "
+                    if not f_legOutBodyOk(open[1], high[1], low[1], close[1])
+                        errCount += 1
+                        errCodes += "8 "
+                    if not f_baseBawahRbrOk(n)
+                        errCount += 1
+                        errCodes += "9 "
+                    if not f_baseAtasRbrOk(n)
+                        errCount += 1
+                        errCodes += "10 "
+                    break
+
+    [nFound, errCount, str.trim(errCodes)]
+
+// =====================================================================
+//  STATE
+// =====================================================================
+// ---- zona DBD ----
+var array<float>  zTop    = array.new<float>()
+var array<float>  zBot    = array.new<float>()
+var array<string> zText   = array.new<string>()
+var array<string> zKind   = array.new<string>()
+var array<bool>   zDead   = array.new<bool>()
+var array<int>    zActive = array.new<int>()
+
+// ---- zona RBR ----
+var array<float>  rTop    = array.new<float>()
+var array<float>  rBot    = array.new<float>()
+var array<string> rText   = array.new<string>()
+var array<string> rKind   = array.new<string>()
+var array<bool>   rDead   = array.new<bool>()
+var array<int>    rActive = array.new<int>()
+
+// ---- penanda per candle ----
+var array<int> patFlag     = array.new<int>()   // DBD: leg in / base / leg out
+var array<int> baseFlag    = array.new<int>()   // DBD: candle base
+var array<int> baseZone    = array.new<int>()   // DBD: index zona
+var array<int> rbrPat      = array.new<int>()   // RBR: leg in / base / leg out
+var array<int> rbrBaseFlag = array.new<int>()   // RBR: candle base
+var array<int> rbrBaseZone = array.new<int>()   // RBR: index zona
+
+// ---- data bar ----
+var array<float> topArr  = array.new<float>()
+var array<float> botArr  = array.new<float>()
+var array<float> hiArr   = array.new<float>()
+var array<float> loArr   = array.new<float>()
+var array<float> shArr   = array.new<float>()
+var array<float> slArr   = array.new<float>()
+var array<float> clsArr  = array.new<float>()
+var array<float> atrArr  = array.new<float>()
+var array<int>   timeArr = array.new<int>()
+
+// ---- zigzag ----
+var array<float> swP   = array.new<float>()
+var array<int>   swIdx = array.new<int>()
+var array<int>   swT   = array.new<int>()
+var int   zzDir    = 1
+var float zzExtP   = na
+var int   zzExtIdx = 0
+var float zzOppP   = na
+var int   zzOppIdx = 0
+
+// ---- order / statistik ----
+var array<int> usedZ = array.new<int>()
+var array<int> usedR = array.new<int>()
+var bool  pend       = false
+var bool  pendIsSell = true
+var int   pendZone   = -1
+var int   pendBar    = 0
+var float pendSL     = na
+var label curLbl     = na      // label setup yang sedang berjalan (untuk diisi hasil TP/SL)
+var string curTxt    = ""
+var bool  filledNoted = false
+var int   lastTotal  = 0
+var int   lastClosed = 0
+var int   nTP  = 0
+var int   nSL  = 0
+var int   nTPs = 0
+var int   nSLs = 0
+var int   nTPb = 0
+var int   nSLb = 0
+
+while patFlag.size() <= bar_index
+    patFlag.push(0)
+    baseFlag.push(0)
+    baseZone.push(-1)
+    rbrPat.push(0)
+    rbrBaseFlag.push(0)
+    rbrBaseZone.push(-1)
+
+while topArr.size() <= bar_index
+    topArr.push(0.0)
+    botArr.push(0.0)
+    hiArr.push(0.0)
+    loArr.push(0.0)
+    shArr.push(0.0)
+    slArr.push(0.0)
+    clsArr.push(0.0)
+    atrArr.push(0.0)
+    timeArr.push(0)
+
+float atrNow = ta.atr(14)
+
+topArr.set(bar_index, math.max(open, close))
+botArr.set(bar_index, math.min(open, close))
+hiArr.set(bar_index, high)
+loArr.set(bar_index, low)
+shArr.set(bar_index, swingBasis == "Body" ? math.max(open, close) : high)
+slArr.set(bar_index, swingBasis == "Body" ? math.min(open, close) : low)
+clsArr.set(bar_index, close)
+atrArr.set(bar_index, nz(atrNow))
+timeArr.set(bar_index, time)
+
+// =====================================================================
+//  DETEKSI DBD
+// =====================================================================
+[validSingle, errSingle, errCodeSingle] = f_dbd_single(
+     open[3], high[3], low[3], close[3],     // C1 (leg in)
+     open[2], high[2], low[2], close[2],     // C2 (base)
+     open[1], high[1], low[1], close[1],     // C3 (leg out)
+     low[4],  high[2],                       // FVG Leg In
+     low[2],  high[0],                       // FVG Leg Out
+     reqDrop,
+     wickPct)
+
+validSingle := validSingle and errSingle <= str.pos("ABCDEFGHIJK", inputMinGrade)
+
+[nBaseMulti, errMulti, errCodeMulti] = f_dbd_multiple(MIN_BASE_T5, MAX_BASE_T5, wickPct, reqDrop)
+
+if errMulti > str.pos("ABCDEFGHIJK", inputMinGrade)
+    nBaseMulti := 0
+
+// =====================================================================
+//  DETEKSI RBR
+// =====================================================================
+[validRbr, errRbr, errCodeRbr] = f_rbr_single(
+     open[3], high[3], low[3], close[3],     // C1 (leg in)
+     open[2], high[2], low[2], close[2],     // C2 (base)
+     open[1], high[1], low[1], close[1],     // C3 (leg out)
+     high[4], low[2],                        // FVG Leg In
+     high[2], low[0],                        // FVG Leg Out
+     reqDrop,
+     wickPct)
+
+validRbr := validRbr and errRbr <= str.pos("ABCDEFGHIJK", inputMinGrade)
+
+[nRbrMulti, errRbrM, errCodeRbrM] = f_rbr_multiple(MIN_BASE_T5, MAX_BASE_T5, wickPct, reqDrop)
+
+if errRbrM > str.pos("ABCDEFGHIJK", inputMinGrade)
+    nRbrMulti := 0
+
+// ---- penanda candle DBD ----
+if barstate.isconfirmed and bar_index >= 10
+    if validSingle
+        for d = 1 to 3
+            patFlag.set(bar_index - d, 1)
+        baseFlag.set(bar_index - 2, 1)
+    if nBaseMulti != 0
+        for d = 1 to nBaseMulti + 2
+            patFlag.set(bar_index - d, 1)
+        for d = 2 to nBaseMulti + 1
+            baseFlag.set(bar_index - d, 1)
+
+// ---- penanda candle RBR ----
+if barstate.isconfirmed and bar_index >= 10
+    if validRbr
+        for d = 1 to 3
+            rbrPat.set(bar_index - d, 1)
+        rbrBaseFlag.set(bar_index - 2, 1)
+    if nRbrMulti != 0
+        for d = 1 to nRbrMulti + 2
+            rbrPat.set(bar_index - d, 1)
+        for d = 2 to nRbrMulti + 1
+            rbrBaseFlag.set(bar_index - d, 1)
+
+// ---- simpan zona DBD Single ----
+if validSingle and barstate.isconfirmed and showDbdSingle
+    zTop.push(high[2])
+    zBot.push(low[2])
+    zText.push(f_gradeText(errSingle))
+    zKind.push("Single")
+    baseZone.set(bar_index - 2, zTop.size() - 1)
+
+// ---- simpan zona DBD Multiple ----
+if nBaseMulti != 0 and barstate.isconfirmed and showDbdMultiple
+    zTop.push(f_baseTop(nBaseMulti))
+    zBot.push(f_baseBottom(nBaseMulti))
+    zText.push(f_gradeText(errMulti))
+    zKind.push("Multiple")
+    for d = 2 to nBaseMulti + 1
+        baseZone.set(bar_index - d, zTop.size() - 1)
+
+// ---- simpan zona RBR Single ----
+if validRbr and barstate.isconfirmed and showRbrSingle
+    rTop.push(high[2])
+    rBot.push(low[2])
+    rText.push(f_gradeText(errRbr))
+    rKind.push("Single")
+    rbrBaseZone.set(bar_index - 2, rTop.size() - 1)
+
+// ---- simpan zona RBR Multiple ----
+if nRbrMulti != 0 and barstate.isconfirmed and showRbrMultiple
+    rTop.push(f_baseTop(nRbrMulti))
+    rBot.push(f_baseBottom(nRbrMulti))
+    rText.push(f_gradeText(errRbrM))
+    rKind.push("Multiple")
+    for d = 2 to nRbrMulti + 1
+        rbrBaseZone.set(bar_index - d, rTop.size() - 1)
+
+// ---- daftarkan zona baru ----
+while zDead.size() < zTop.size()
+    zActive.push(zDead.size())
+    zDead.push(false)
+while rDead.size() < rTop.size()
+    rActive.push(rDead.size())
+    rDead.push(false)
+
+// DBD mati: BODY candle menyentuh ekor atas base
+// RBR mati: BODY candle menyentuh ekor bawah base
+float curTop = math.max(open, close)
+float curBot = math.min(open, close)
+
+if zActive.size() > 0
+    for a = zActive.size() - 1 to 0
+        int z = zActive.get(a)
+        if zTop.get(z) <= curTop
+            zDead.set(z, true)
+            zActive.remove(a)
+
+if rActive.size() > 0
+    for a = rActive.size() - 1 to 0
+        int z = rActive.get(a)
+        if rBot.get(z) >= curBot
+            rDead.set(z, true)
+            rActive.remove(a)
+
+// =====================================================================
+//  ZIGZAG (inkremental, sama dengan indikator v1.5 termasuk konfirmasi ATR)
+// =====================================================================
+f_validSH(array<float> topA, array<float> botA, int pIdx, int toIdx) =>
+    int   cnt = 0
+    float ref = botA.get(pIdx)
+    if pIdx < toIdx
+        for j = pIdx + 1 to toIdx
+            if topA.get(j) < ref
+                cnt += 1
+                if cnt >= 2
+                    break
+    cnt >= 2
+
+f_validSL(array<float> topA, array<float> botA, array<float> clsA, int pIdx, int toIdx) =>
+    int   cnt = 0
+    float ref = clsA.get(pIdx)
+    if pIdx < toIdx
+        for j = pIdx + 1 to toIdx
+            if botA.get(j) > ref
+                cnt += 1
+                if cnt >= 2
+                    break
+    cnt >= 2
+
+bool newSL = false
+bool newSH = false
+
+if bar_index == 0
+    zzExtP := shArr.get(0)
+    zzOppP := slArr.get(0)
+else
+    int   idx  = bar_index
+    float topB = shArr.get(idx)
+    float botB = slArr.get(idx)
+
+    if zzDir == 1
+        if topB > zzExtP
+            zzExtP   := topB
+            zzExtIdx := idx
+            zzOppP   := botB
+            zzOppIdx := idx
+        else
+            if botB < zzOppP
+                zzOppP   := botB
+                zzOppIdx := idx
+            if (zzOppIdx - zzExtIdx >= swingMinBars and f_validSH(topArr, botArr, zzExtIdx, idx)) or (swingAtrMult > 0 and zzOppIdx > zzExtIdx and zzExtP - zzOppP >= swingAtrMult * atrArr.get(zzExtIdx))
+                swP.push(zzExtP)
+                swIdx.push(zzExtIdx)
+                swT.push(1)
+                newSH    := true
+                zzDir    := -1
+                zzExtP   := zzOppP
+                zzExtIdx := zzOppIdx
+                zzOppP   := shArr.get(zzExtIdx)
+                zzOppIdx := zzExtIdx
+                for j = zzExtIdx to idx
+                    if shArr.get(j) > zzOppP
+                        zzOppP   := shArr.get(j)
+                        zzOppIdx := j
+    else
+        if botB < zzExtP
+            zzExtP   := botB
+            zzExtIdx := idx
+            zzOppP   := topB
+            zzOppIdx := idx
+        else
+            if topB > zzOppP
+                zzOppP   := topB
+                zzOppIdx := idx
+            if (zzOppIdx - zzExtIdx >= swingMinBars and f_validSL(topArr, botArr, clsArr, zzExtIdx, idx)) or (swingAtrMult > 0 and zzOppIdx > zzExtIdx and zzOppP - zzExtP >= swingAtrMult * atrArr.get(zzExtIdx))
+                swP.push(zzExtP)
+                swIdx.push(zzExtIdx)
+                swT.push(-1)
+                newSL    := true
+                zzDir    := 1
+                zzExtP   := zzOppP
+                zzExtIdx := zzOppIdx
+                zzOppP   := slArr.get(zzExtIdx)
+                zzOppIdx := zzExtIdx
+                for j = zzExtIdx to idx
+                    if slArr.get(j) < zzOppP
+                        zzOppP   := slArr.get(j)
+                        zzOppIdx := j
+
+// =====================================================================
+//  MANAJEMEN ORDER
+// =====================================================================
+// 1) order terisi -> tandai zona sudah dipakai
+int totalTrades = strategy.opentrades + strategy.closedtrades
+if totalTrades > lastTotal
+    if pend
+        if pendIsSell
+            usedZ.push(pendZone)
+        else
+            usedR.push(pendZone)
+        pend := false
+        if strategy.opentrades > 0 and not na(curLbl)
+            int oi = strategy.opentrades - 1
+            curTxt += "\nTERISI @ " + str.tostring(strategy.opentrades.entry_price(oi), format.mintick) + " | " + str.format_time(strategy.opentrades.entry_time(oi), "dd/MM/yyyy HH:mm", "GMT+7")
+            filledNoted := true
+            label.set_text(curLbl, "[ TERISI ]\n" + curTxt)
+    lastTotal := totalTrades
+
+// 2) batalkan order limit yang sudah basi
+if pend and strategy.position_size == 0
+    bool slTersentuh = pendIsSell ? high >= pendSL : low <= pendSL
+    if slTersentuh or bar_index - pendBar >= maxWait
+        strategy.cancel("SELL")
+        strategy.cancel("SELL_EXIT")
+        strategy.cancel("BUY")
+        strategy.cancel("BUY_EXIT")
+        pend := false
+        if not na(curLbl)
+            curTxt += "\nDIBATALKAN: " + (slTersentuh ? "harga menyentuh level SL sebelum entry terisi" : "lewat " + str.tostring(maxWait) + " bar tanpa terisi") + " | " + str.format_time(time, "dd/MM/yyyy HH:mm", "GMT+7")
+            label.set_text(curLbl, "[ BATAL ]\n" + curTxt)
+            curLbl := na
+
+// 3) hitung TP / SL dari trade yang baru tertutup
+if strategy.closedtrades > lastClosed
+    for t = lastClosed to strategy.closedtrades - 1
+        bool win    = strategy.closedtrades.profit(t) > 0
+        bool isSellT = strategy.closedtrades.entry_id(t) == "SELL"
+        if win
+            nTP += 1
+            if isSellT
+                nTPs += 1
+            else
+                nTPb += 1
+        else
+            nSL += 1
+            if isSellT
+                nSLs += 1
+            else
+                nSLb += 1
+
+        // ---- catat hasil: TP / SL kena di harga berapa, tanggal & jam berapa ----
+        float  exitP   = strategy.closedtrades.exit_price(t)
+        int    exitT   = strategy.closedtrades.exit_time(t)
+        string exitTxt = str.format_time(exitT, "dd/MM/yyyy HH:mm", "GMT+7")
+        string hasil   = (win ? "TP KENA @ " : "SL KENA @ ") + str.tostring(exitP, format.mintick) + " | " + exitTxt
+
+        if showDebug
+            label.new(x=exitT, y=exitP, xloc=xloc.bar_time,
+                 text=(isSellT ? "SELL " : "BUY ") + hasil,
+                 style=label.style_label_left,
+                 color=color.new(win ? color.lime : color.red, 20),
+                 textcolor=win ? color.black : color.white,
+                 size=size.small, textalign=text.align_left)
+
+        if not na(curLbl)
+            if not filledNoted
+                curTxt += "\nTERISI @ " + str.tostring(strategy.closedtrades.entry_price(t), format.mintick) + " | " + str.format_time(strategy.closedtrades.entry_time(t), "dd/MM/yyyy HH:mm", "GMT+7")
+            curTxt += "\nHASIL: " + hasil
+            label.set_text(curLbl, (win ? "[ TP KENA ]\n" : "[ SL KENA ]\n") + curTxt)
+            curLbl := na
+            filledNoted := false
+    lastClosed := strategy.closedtrades
+
+// =====================================================================
+//  SCAN KE KIRI DARI GARIS 61.8 (aturan sama dengan garis control indikator v1.5)
+//  - kena ekor saja              -> lanjut ke kiri
+//  - kena gap kosong / body      -> dianggap body
+//  - skenario valid: base aktif, leg in (base di kirinya aktif), leg out (garis juga kena base)
+//  - kena body candle lain       -> terhalang, berhenti
+//  Return: [zid, baseIdx, touchIdx, jenis kena, alasan]
+// =====================================================================
+f_getPat(int idx, bool isSell) =>
+    int v = 0
+    if isSell
+        v := patFlag.get(idx)
+    else
+        v := rbrPat.get(idx)
+    v
+
+f_getBase(int idx, bool isSell) =>
+    int v = 0
+    if isSell
+        v := baseFlag.get(idx)
+    else
+        v := rbrBaseFlag.get(idx)
+    v
+
+f_getZone(int idx, bool isSell) =>
+    int v = -1
+    if isSell
+        v := baseZone.get(idx)
+    else
+        v := rbrBaseZone.get(idx)
+    v
+
+f_baseAktifAt(int idx, bool isSell) =>
+    bool ok = false
+    if idx >= 0 and idx <= bar_index
+        if isSell
+            if baseFlag.get(idx) == 1
+                int zid = baseZone.get(idx)
+                if zid >= 0 and zid < zTop.size()
+                    ok := not (buangZonaMati and zDead.get(zid))
+        else
+            if rbrBaseFlag.get(idx) == 1
+                int zid = rbrBaseZone.get(idx)
+                if zid >= 0 and zid < rTop.size()
+                    ok := not (buangZonaMati and rDead.get(zid))
+    ok
+
+f_scan(float p618, int fromIdx, bool isSell, bool doScan) =>
+    int    zid      = -1
+    int    baseIdx  = na
+    int    touchIdx = na
+    string kind     = ""
+    string why      = "tidak kena base / leg apa pun dalam jangkauan scan"
+
+    if doScan
+        int scanTo = math.max(0, fromIdx - maxScan)
+        int i      = fromIdx
+        while i >= scanTo
+            bool inRange = p618 >= loArr.get(i) and p618 <= hiArr.get(i)
+            bool gap     = false
+            if i + 1 <= bar_index
+                gap := (p618 > hiArr.get(i) and p618 < loArr.get(i + 1)) or
+                     (p618 < loArr.get(i) and p618 > hiArr.get(i + 1))
+
+            if inRange or gap
+                bool isLegIn  = f_getPat(i, isSell) == 1 and f_getBase(i, isSell) == 0 and i + 1 <= bar_index and f_getBase(i + 1, isSell) == 1
+                bool kiriBase = i >= 1 and f_baseAktifAt(i - 1, isSell)
+                bool isLegOut = f_getPat(i, isSell) == 1 and f_getBase(i, isSell) == 0 and i >= 1 and f_getBase(i - 1, isSell) == 1
+
+                int baseHit = na
+                if isLegOut
+                    int jb = i - 1
+                    while jb >= 0 and f_getBase(jb, isSell) == 1
+                        if f_baseAktifAt(jb, isSell) and p618 >= loArr.get(jb) and p618 <= hiArr.get(jb)
+                            baseHit := jb
+                            break
+                        jb -= 1
+
+                if inRange and useBase and f_baseAktifAt(i, isSell)
+                    zid      := f_getZone(i, isSell)
+                    baseIdx  := i
+                    touchIdx := i
+                    kind     := "BASE"
+                    break
+                else if inRange and useLegIn and isLegIn and kiriBase
+                    zid      := f_getZone(i - 1, isSell)
+                    baseIdx  := i - 1
+                    touchIdx := i
+                    kind     := "LEG IN"
+                    break
+                else if inRange and useLegOut and isLegOut and not na(baseHit)
+                    zid      := f_getZone(baseHit, isSell)
+                    baseIdx  := baseHit
+                    touchIdx := i
+                    kind     := "LEG OUT"
+                    break
+                else
+                    bool kenaBody = gap or (p618 >= botArr.get(i) and p618 <= topArr.get(i))
+                    if kenaBody
+                        touchIdx := i
+                        if gap and not inRange
+                            why := "terhalang gap kosong (dianggap body)"
+                        else if f_getBase(i, isSell) == 1
+                            why := "terhalang body base yang sudah mati / tidak aktif"
+                        else if isLegIn
+                            why := "terhalang body leg in, tapi base di kirinya tidak aktif"
+                        else if f_getPat(i, isSell) == 1
+                            why := "terhalang body leg out, garis tidak kena base"
+                        else
+                            why := "terhalang body candle biasa"
+                        break
+            i -= 1
+
+    [zid, baseIdx, touchIdx, kind, why]
+
+// =====================================================================
+//  SETUP BARU
+//  SELL: Swing Low baru terkonfirmasi -> 61.8 dari lembah ke gunung -> cari DBD
+//  BUY : Swing High baru terkonfirmasi -> 61.8 dari puncak ke lembah -> cari RBR
+// =====================================================================
+bool isSellSetup = newSL
+bool doSetup = use618 and time >= startTime and strategy.position_size == 0 and swP.size() >= 2 and ((newSL and useSell) or (newSH and useBuy))
+
+int   lastI = na
+float lastP = na
+int   prevI = na
+float prevP = na
+if swP.size() >= 2
+    lastI := swIdx.get(swIdx.size() - 1)
+    lastP := swP.get(swP.size() - 1)
+    prevI := swIdx.get(swIdx.size() - 2)
+    prevP := swP.get(swP.size() - 2)
+
+bool  legOk    = false
+float p618     = na
+float prevSame = na     // swing sejenis sebelumnya (low untuk SELL, high untuk BUY)
+bool  beatOk   = true
+int   cntKonf  = 0
+bool  konfOk   = true
+if doSetup
+    if isSellSetup
+        legOk := prevP > lastP
+        p618  := lastP + (prevP - lastP) * 0.618
+    else
+        legOk := lastP > prevP
+        p618  := lastP - (lastP - prevP) * 0.618
+
+    // 1) swing harus mengalahkan swing sejenis sebelumnya
+    if swP.size() >= 3
+        prevSame := swP.get(swP.size() - 3)
+    if cekBeatSwing
+        if na(prevSame)
+            beatOk := false
+        else
+            beatOk := isSellSetup ? lastP < prevSame : lastP > prevSame
+
+    // 2) hitung candle close konfirmasi setelah swing
+    //    SELL: close di atas HIGH candle swing low | BUY: close di bawah LOW candle swing high
+    if lastI < bar_index
+        for j = lastI + 1 to bar_index
+            if isSellSetup
+                if clsArr.get(j) > hiArr.get(lastI)
+                    cntKonf += 1
+            else
+                if clsArr.get(j) < loArr.get(lastI)
+                    cntKonf += 1
+    if cekKonfirmasi
+        konfOk := cntKonf >= nKonfirmasi
+
+bool swingOk = beatOk and konfOk
+
+[foundZ, baseIdx, touchIdx, hitKind, hitWhy] = f_scan(p618, lastI, isSellSetup, doSetup and legOk and swingOk)
+
+if doSetup
+    string fmt     = "dd/MM/yyyy HH:mm"
+    string dirTxt  = isSellSetup ? "SELL" : "BUY"
+    string patTxt  = isSellSetup ? "DBD" : "RBR"
+    color  dirCol  = isSellSetup ? color.red : color.lime
+    int    hiI     = isSellSetup ? prevI : lastI
+    int    loI     = isSellSetup ? lastI : prevI
+    float  hiP     = isSellSetup ? prevP : lastP
+    float  loP     = isSellSetup ? lastP : prevP
+    string tHi     = str.format_time(timeArr.get(hiI), fmt, "GMT+7")
+    string tLo     = str.format_time(timeArr.get(loI), fmt, "GMT+7")
+    string swTxt   = "Swing High : " + str.tostring(hiP, format.mintick) + " (" + tHi + ")\n" +
+         "Swing Low  : " + str.tostring(loP, format.mintick) + " (" + tLo + ")"
+
+    if not legOk
+        if showDebug and showDebugMiss
+            label.new(x=timeArr.get(lastI), y=lastP, xloc=xloc.bar_time,
+                 text=dirTxt + " | leg swing tidak valid\n" + swTxt,
+                 style=isSellSetup ? label.style_label_up : label.style_label_down,
+                 color=color.new(color.gray, 30), textcolor=color.white, size=size.small, textalign=text.align_left)
+    else if not swingOk
+        if showDebug and showDebugMiss
+            string alasanSw = (beatOk ? "" : "Swing " + (isSellSetup ? "low " : "high ") + str.tostring(lastP, format.mintick) + " belum mengalahkan swing sebelumnya " + str.tostring(prevSame, format.mintick) + "\n") +
+                 (konfOk ? "" : "Hanya " + str.tostring(cntKonf) + " candle close konfirmasi (butuh " + str.tostring(nKonfirmasi) + ")\n")
+            label.new(x=timeArr.get(lastI), y=lastP, xloc=xloc.bar_time,
+                 text=dirTxt + " | swing TIDAK VALID\n" + alasanSw + swTxt,
+                 style=isSellSetup ? label.style_label_up : label.style_label_down,
+                 color=color.new(color.gray, 30), textcolor=color.white, size=size.small, textalign=text.align_left)
+    else if foundZ < 0
+        if showDebug and showDebugMiss
+            label.new(x=timeArr.get(lastI), y=lastP, xloc=xloc.bar_time,
+                 text=dirTxt + " | " + patTxt + " TIDAK ADA\n" +
+                 "Garis 61.8 : " + str.tostring(p618, format.mintick) + "\n" +
+                 hitWhy + "\n" + swTxt,
+                 style=isSellSetup ? label.style_label_up : label.style_label_down,
+                 color=color.new(color.gray, 30), textcolor=color.white, size=size.small, textalign=text.align_left)
+    else
+        float  zt = na
+        float  zb = na
+        string zGr = ""
+        string zKd = ""
+        if isSellSetup
+            zt  := zTop.get(foundZ)
+            zb  := zBot.get(foundZ)
+            zGr := zText.get(foundZ)
+            zKd := zKind.get(foundZ)
+        else
+            zt  := rTop.get(foundZ)
+            zb  := rBot.get(foundZ)
+            zGr := rText.get(foundZ)
+            zKd := rKind.get(foundZ)
+
+        float buf   = pipBuffer * f_pipSize()
+        float entry = isSellSetup ? zb : zt
+        float sl    = isSellSetup ? zt + buf : zb - buf
+        float risk  = math.abs(sl - entry)
+        float tp    = isSellSetup ? entry - rrMult * risk : entry + rrMult * risk
+        bool  entryOk = isSellSetup ? entry > close : entry < close
+        bool  sudahPakai = isSellSetup ? usedZ.includes(foundZ) : usedR.includes(foundZ)
+
+        string status = ""
+        bool   ordered = false
+        if sudahPakai
+            status := "SKIP: zona ini sudah pernah dipakai trade sebelumnya"
+        else if not entryOk
+            status := "SKIP: harga sekarang " + str.tostring(close, format.mintick) + " sudah lewat level entry " + str.tostring(entry, format.mintick) + (isSellSetup ? " (sell limit harus di atas harga)" : " (buy limit harus di bawah harga)")
+        else
+            status  := (isSellSetup ? "SELL LIMIT" : "BUY LIMIT") + " @ " + str.tostring(entry, format.mintick) + " dipasang (PENDING, belum terisi)"
+            ordered := true
+            if pend and not na(curLbl)
+                curTxt += "\nDIBATALKAN: diganti setup baru"
+                label.set_text(curLbl, "[ BATAL ]\n" + curTxt)
+                curLbl := na
+            strategy.cancel("SELL")
+            strategy.cancel("SELL_EXIT")
+            strategy.cancel("BUY")
+            strategy.cancel("BUY_EXIT")
+            if isSellSetup
+                strategy.entry("SELL", strategy.short, limit=entry, comment="DBD " + zGr)
+                strategy.exit("SELL_EXIT", from_entry="SELL", stop=sl, limit=tp, comment_profit="TP", comment_loss="SL")
+            else
+                strategy.entry("BUY", strategy.long, limit=entry, comment="RBR " + zGr)
+                strategy.exit("BUY_EXIT", from_entry="BUY", stop=sl, limit=tp, comment_profit="TP", comment_loss="SL")
+            pend       := true
+            pendIsSell := isSellSetup
+            pendZone   := foundZ
+            pendBar    := bar_index
+            pendSL     := sl
+
+        if showDebug
+            string tTouch = str.format_time(timeArr.get(touchIdx), fmt, "GMT+7")
+            string tBase  = str.format_time(timeArr.get(baseIdx), fmt, "GMT+7")
+            string txt = (ordered ? dirTxt + " LIMIT" : dirTxt + " DILEWATI") + " | " + patTxt + " " + zKd + " | kena " + hitKind + " | Grade " + zGr + "\n" +
+                 "Garis 61.8 : " + str.tostring(p618, format.mintick) + "\n" +
+                 "Kena " + patTxt + " : " + tTouch + "\n" +
+                 "Base " + patTxt + " : " + tBase + "\n" +
+                 swTxt + "\n" +
+                 "Filter : " + (isSellSetup ? "Low " : "High ") + str.tostring(lastP, format.mintick) + (isSellSetup ? " < " : " > ") + "swing sebelumnya " + str.tostring(prevSame, format.mintick) + " | konfirmasi " + str.tostring(cntKonf) + " candle\n" +
+                 (isSellSetup ? "SELL LIMIT" : "BUY LIMIT") + " @ " + str.tostring(entry, format.mintick) + " | SL " + str.tostring(sl, format.mintick) + " | TP " + str.tostring(tp, format.mintick) + "\n" +
+                 status
+            label lb = label.new(x=timeArr.get(touchIdx), y=p618, xloc=xloc.bar_time,
+                 text=txt,
+                 style=isSellSetup ? label.style_label_down : label.style_label_up,
+                 color=color.new(dirCol, 20), textcolor=isSellSetup ? color.white : color.black,
+                 size=size.small, textalign=text.align_left)
+            if ordered
+                curLbl      := lb
+                curTxt      := txt
+                filledNoted := false
+            line.new(x1=timeArr.get(touchIdx), y1=p618, x2=timeArr.get(lastI), y2=p618, xloc=xloc.bar_time,
+                 color=dirCol, style=line.style_dotted, width=1)
+
+// setup yang muncul saat masih ada posisi terbuka (dilewati tanpa jejak kalau tidak ditandai)
+bool setupSibuk = use618 and time >= startTime and strategy.position_size != 0 and swP.size() >= 2 and ((newSL and useSell) or (newSH and useBuy))
+if setupSibuk and showDebug and showDebugMiss
+    label.new(x=time, y=close, xloc=xloc.bar_time,
+         text=(newSL ? "SELL" : "BUY") + " | setup DILEWATI: masih ada posisi terbuka",
+         style=newSL ? label.style_label_up : label.style_label_down,
+         color=color.new(color.gray, 30), textcolor=color.white, size=size.small, textalign=text.align_left)
+
+// =====================================================================
+//  TABEL HASIL
+// =====================================================================
+var table tbl = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 15), border_width=1, border_color=color.gray)
+
+if barstate.islast
+    int   nTotal = nTP + nSL
+    float winPct = nTotal > 0 ? nTP * 100.0 / nTotal : 0.0
+    float netR   = nTP * rrMult - nSL
+
+    table.cell(tbl, 0, 0, "Mulai",       text_color=color.white, text_halign=text.align_left)
+    table.cell(tbl, 1, 0, str.format_time(startTime, "dd/MM/yyyy", "GMT+7"), text_color=color.white)
+    table.cell(tbl, 0, 1, "Take Profit", text_color=color.lime,  text_halign=text.align_left)
+    table.cell(tbl, 1, 1, str.tostring(nTP), text_color=color.lime)
+    table.cell(tbl, 0, 2, "Stop Loss",   text_color=color.red,   text_halign=text.align_left)
+    table.cell(tbl, 1, 2, str.tostring(nSL), text_color=color.red)
+    table.cell(tbl, 0, 3, "Total",       text_color=color.white, text_halign=text.align_left)
+    table.cell(tbl, 1, 3, str.tostring(nTotal), text_color=color.white)
+    table.cell(tbl, 0, 4, "Winrate",     text_color=color.white, text_halign=text.align_left)
+    table.cell(tbl, 1, 4, str.tostring(winPct, "#.##") + "%", text_color=color.white)
+    table.cell(tbl, 0, 5, "Net (R)",     text_color=color.yellow, text_halign=text.align_left)
+    table.cell(tbl, 1, 5, str.tostring(netR, "#.##") + "R", text_color=color.yellow)
+    table.cell(tbl, 0, 6, "SELL TP / SL", text_color=color.white, text_halign=text.align_left)
+    table.cell(tbl, 1, 6, str.tostring(nTPs) + " / " + str.tostring(nSLs), text_color=color.white)
+    table.cell(tbl, 0, 7, "BUY TP / SL",  text_color=color.white, text_halign=text.align_left)
+    table.cell(tbl, 1, 7, str.tostring(nTPb) + " / " + str.tostring(nSLb), text_color=color.white)
+    table.cell(tbl, 0, 8, "Grade min / Dev", text_color=color.white, text_halign=text.align_left)
+    table.cell(tbl, 1, 8, inputMinGrade + " / " + (devMode ? "ON" : "OFF"), text_color=color.white)
