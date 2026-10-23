@@ -1,5 +1,5 @@
 //@version=5
-strategy("7Seas_PAC_Strategy (v1.5)", overlay=true,
+strategy("7Seas_PAC_Strategy (v1.7)", overlay=true,
      initial_capital=10000, default_qty_type=strategy.fixed, default_qty_value=1,
      margin_long=0, margin_short=0,
      calc_on_every_tick=false, process_orders_on_close=false,
@@ -20,7 +20,7 @@ useSell       = input.bool(true, "Aktifkan SELL (DBD)", group="Strategi")
 useBuy        = input.bool(true, "Aktifkan BUY (RBR)", group="Strategi")
 use618        = input.bool(true, "Aktifkan garis 61.8%", group="Strategi")
 cekBeatSwing  = input.bool(true, "Swing harus mengalahkan swing sejenis sebelumnya", group="Strategi", tooltip="SELL: swing low baru harus lebih rendah dari swing low sebelumnya.\nBUY: swing high baru harus lebih tinggi dari swing high sebelumnya.\nKalau belum, setup dianggap tidak valid dan DBD/RBR tidak di-scan.")
-cekKonfirmasi = input.bool(true, "Swing harus punya candle close konfirmasi", group="Strategi", tooltip="SELL: setelah swing low harus ada N candle yang CLOSE-nya di atas HIGH candle swing low.\nBUY: setelah swing high harus ada N candle yang CLOSE-nya di bawah LOW candle swing high.")
+cekKonfirmasi = input.bool(true, "Swing harus punya candle close konfirmasi", group="Strategi", tooltip="SELL: setelah swing low harus ada N candle yang CLOSE-nya di atas CLOSE candle swing low.\nBUY: setelah swing high harus ada N candle yang CLOSE-nya di bawah CLOSE candle swing high.")
 nKonfirmasi   = input.int(2, "Jumlah candle close konfirmasi", minval=1, group="Strategi")
 useBase       = input.bool(true, "Garis kena BASE = valid", group="Strategi")
 useLegIn      = input.bool(true, "Garis kena LEG IN (base di kirinya) = valid", group="Strategi")
@@ -45,8 +45,9 @@ inputTinggiBodyBase = input.bool(true, "Base Body Height vs. Leg In/Out (Base Bo
 
 // ---- Swing ----
 swingBasis   = input.string("Wick", "Swing High/Low Source", options=["Body", "Wick"], group="Swing Indicator")
-swingAtrMult = input.float(2.0, "Konfirmasi swing alternatif (x ATR, 0 = mati)", minval=0.0, step=0.5, group="Swing Indicator")
-swingMinBars = 3
+swingLeft = input.int(2, "Pivot Left Bars", minval=1, group="Swing Indicator")
+
+maxWaitKonf = input.int(3, "Tunggu konfirmasi maksimal (bar)", minval=1, group="Strategi", tooltip="Setup dibatalkan kalau dalam N bar setelah swing belum ada cukup candle konfirmasi, atau harga menembus swing.")
 
 showDbdSingle   = true
 showDbdMultiple = true
@@ -605,11 +606,15 @@ var array<int>   timeArr = array.new<int>()
 var array<float> swP   = array.new<float>()
 var array<int>   swIdx = array.new<int>()
 var array<int>   swT   = array.new<int>()
-var int   zzDir    = 1
-var float zzExtP   = na
-var int   zzExtIdx = 0
-var float zzOppP   = na
-var int   zzOppIdx = 0
+
+// ---- state pivot (v1.6) ----
+var array<int>   pvLIdx  = array.new<int>()     // kandidat swing low yang menunggu konfirmasi
+var array<int>   pvLCnt  = array.new<int>()
+var array<int>   pvHIdx  = array.new<int>()     // kandidat swing high yang menunggu konfirmasi
+var array<int>   pvHCnt  = array.new<int>()
+var array<float> rawP    = array.new<float>()   // pivot terkonfirmasi (urut posisi candle, belum digabung)
+var array<int>   rawIdx  = array.new<int>()
+var array<int>   rawT    = array.new<int>()
 
 // ---- order / statistik ----
 var array<int> usedZ = array.new<int>()
@@ -630,6 +635,19 @@ var int   nTPs = 0
 var int   nSLs = 0
 var int   nTPb = 0
 var int   nSLb = 0
+
+var bool  wOn       = false
+var bool  wSell     = true
+var int   wI        = na
+var float wP        = na
+var int   wPrevI    = na
+var float wPrevP    = na
+var float wPrevSame = na
+
+var bool   pendArmed   = false
+var float  pendEntry   = na
+var float  pendTP      = na
+var string pendComment = ""
 
 while patFlag.size() <= bar_index
     patFlag.push(0)
@@ -785,90 +803,130 @@ if rActive.size() > 0
             rDead.set(z, true)
             rActive.remove(a)
 
-// =====================================================================
-//  ZIGZAG (inkremental, sama dengan indikator v1.5 termasuk konfirmasi ATR)
-// =====================================================================
-f_validSH(array<float> topA, array<float> botA, int pIdx, int toIdx) =>
-    int   cnt = 0
-    float ref = botA.get(pIdx)
-    if pIdx < toIdx
-        for j = pIdx + 1 to toIdx
-            if topA.get(j) < ref
-                cnt += 1
-                if cnt >= 2
-                    break
-    cnt >= 2
 
-f_validSL(array<float> topA, array<float> botA, array<float> clsA, int pIdx, int toIdx) =>
-    int   cnt = 0
-    float ref = clsA.get(pIdx)
-    if pIdx < toIdx
-        for j = pIdx + 1 to toIdx
-            if botA.get(j) > ref
-                cnt += 1
-                if cnt >= 2
-                    break
-    cnt >= 2
+// =====================================================================
+//  ZIGZAG PIVOT v1.6 (inkremental, tanpa ATR, tanpa lookahead)
+//  Pivot valid kalau di kiri (swingLeft bar) tidak ada yang lebih ekstrem,
+//  dan di kanan terkumpul 2 candle yang lebih tinggi (low) / lebih rendah (high)
+//  sebelum ada candle yang menembusnya. Candle yang sama persis dilewati.
+// =====================================================================
+f_addPivot(array<float> p, array<int> ix, array<int> t, float price, int idx, int typ) =>
+    int n = t.size()
+    bool samaTipe = false
+    if n > 0
+        samaTipe := t.get(n - 1) == typ
+    if samaTipe
+        bool lebihEkstrem = typ == 1 ? price > p.get(n - 1) : price < p.get(n - 1)
+        if lebihEkstrem
+            p.set(n - 1, price)
+            ix.set(n - 1, idx)
+    else
+        p.push(price)
+        ix.push(idx)
+        t.push(typ)
+    0
+
+// sisipkan pivot ke daftar mentah, tetap urut menurut posisi candle (low didahulukan kalau satu candle)
+f_insertRaw(array<float> p, array<int> ix, array<int> t, float price, int idx, int typ) =>
+    int pos = t.size()
+    bool geser = true
+    while geser and pos > 0
+        int qi = ix.get(pos - 1)
+        int qt = t.get(pos - 1)
+        if qi > idx or (qi == idx and qt == 1 and typ == -1)
+            pos -= 1
+        else
+            geser := false
+    p.insert(pos, price)
+    ix.insert(pos, idx)
+    t.insert(pos, typ)
+    0
+
+// bangun ulang daftar swing (selang-seling) dari daftar mentah
+f_rebuild(array<float> rp, array<int> ri, array<int> rt, array<float> p, array<int> ix, array<int> t) =>
+    p.clear()
+    ix.clear()
+    t.clear()
+    if rt.size() > 0
+        for k = 0 to rt.size() - 1
+            f_addPivot(p, ix, t, rp.get(k), ri.get(k), rt.get(k))
+    0
 
 bool newSL = false
 bool newSH = false
 
-if bar_index == 0
-    zzExtP := shArr.get(0)
-    zzOppP := slArr.get(0)
-else
-    int   idx  = bar_index
-    float topB = shArr.get(idx)
-    float botB = slArr.get(idx)
+int prevLastT = swT.size() > 0 ? swT.get(swT.size() - 1) : 0
+int prevLastI = swIdx.size() > 0 ? swIdx.get(swIdx.size() - 1) : -1
+int prevSize  = swP.size()
+bool adaBaru  = false
 
-    if zzDir == 1
-        if topB > zzExtP
-            zzExtP   := topB
-            zzExtIdx := idx
-            zzOppP   := botB
-            zzOppIdx := idx
+// 1) proses kandidat swing low yang menunggu
+int aL = pvLIdx.size() - 1
+while aL >= 0
+    int   ci = pvLIdx.get(aL)
+    float cl = slArr.get(ci)
+    float nowL = slArr.get(bar_index)
+    if nowL < cl
+        pvLIdx.remove(aL)
+        pvLCnt.remove(aL)
+    else if nowL > cl
+        int c = pvLCnt.get(aL) + 1
+        if c >= 2
+            f_insertRaw(rawP, rawIdx, rawT, cl, ci, -1)
+            adaBaru := true
+            pvLIdx.remove(aL)
+            pvLCnt.remove(aL)
         else
-            if botB < zzOppP
-                zzOppP   := botB
-                zzOppIdx := idx
-            if (zzOppIdx - zzExtIdx >= swingMinBars and f_validSH(topArr, botArr, zzExtIdx, idx)) or (swingAtrMult > 0 and zzOppIdx > zzExtIdx and zzExtP - zzOppP >= swingAtrMult * atrArr.get(zzExtIdx))
-                swP.push(zzExtP)
-                swIdx.push(zzExtIdx)
-                swT.push(1)
-                newSH    := true
-                zzDir    := -1
-                zzExtP   := zzOppP
-                zzExtIdx := zzOppIdx
-                zzOppP   := shArr.get(zzExtIdx)
-                zzOppIdx := zzExtIdx
-                for j = zzExtIdx to idx
-                    if shArr.get(j) > zzOppP
-                        zzOppP   := shArr.get(j)
-                        zzOppIdx := j
-    else
-        if botB < zzExtP
-            zzExtP   := botB
-            zzExtIdx := idx
-            zzOppP   := topB
-            zzOppIdx := idx
+            pvLCnt.set(aL, c)
+    aL -= 1
+
+// 2) proses kandidat swing high yang menunggu
+int aH = pvHIdx.size() - 1
+while aH >= 0
+    int   ci = pvHIdx.get(aH)
+    float ch = shArr.get(ci)
+    float nowH = shArr.get(bar_index)
+    if nowH > ch
+        pvHIdx.remove(aH)
+        pvHCnt.remove(aH)
+    else if nowH < ch
+        int c = pvHCnt.get(aH) + 1
+        if c >= 2
+            f_insertRaw(rawP, rawIdx, rawT, ch, ci, 1)
+            adaBaru := true
+            pvHIdx.remove(aH)
+            pvHCnt.remove(aH)
         else
-            if topB > zzOppP
-                zzOppP   := topB
-                zzOppIdx := idx
-            if (zzOppIdx - zzExtIdx >= swingMinBars and f_validSL(topArr, botArr, clsArr, zzExtIdx, idx)) or (swingAtrMult > 0 and zzOppIdx > zzExtIdx and zzOppP - zzExtP >= swingAtrMult * atrArr.get(zzExtIdx))
-                swP.push(zzExtP)
-                swIdx.push(zzExtIdx)
-                swT.push(-1)
-                newSL    := true
-                zzDir    := 1
-                zzExtP   := zzOppP
-                zzExtIdx := zzOppIdx
-                zzOppP   := slArr.get(zzExtIdx)
-                zzOppIdx := zzExtIdx
-                for j = zzExtIdx to idx
-                    if slArr.get(j) < zzOppP
-                        zzOppP   := slArr.get(j)
-                        zzOppIdx := j
+            pvHCnt.set(aH, c)
+    aH -= 1
+
+// 3) bar ini jadi kandidat baru kalau lolos syarat sisi kiri
+if bar_index >= swingLeft
+    float hhNow = shArr.get(bar_index)
+    float llNow = slArr.get(bar_index)
+    bool  kandH = true
+    bool  kandL = true
+    for j = 1 to swingLeft
+        if shArr.get(bar_index - j) > hhNow
+            kandH := false
+        if slArr.get(bar_index - j) < llNow
+            kandL := false
+    if kandL
+        pvLIdx.push(bar_index)
+        pvLCnt.push(0)
+    if kandH
+        pvHIdx.push(bar_index)
+        pvHCnt.push(0)
+
+// 4) ada pivot baru terkonfirmasi -> bangun ulang daftar swing
+if adaBaru
+    f_rebuild(rawP, rawIdx, rawT, swP, swIdx, swT)
+    if swP.size() > 0
+        int lastIdxNow = swIdx.get(swIdx.size() - 1)
+        int lastTNow   = swT.get(swT.size() - 1)
+        if lastIdxNow != prevLastI or lastTNow != prevLastT or swP.size() != prevSize
+            newSL := lastTNow == -1
+            newSH := lastTNow == 1
 
 // =====================================================================
 //  MANAJEMEN ORDER
@@ -882,26 +940,53 @@ if totalTrades > lastTotal
         else
             usedR.push(pendZone)
         pend := false
+        pendArmed := false
         if strategy.opentrades > 0 and not na(curLbl)
             int oi = strategy.opentrades - 1
-            curTxt += "\nTERISI @ " + str.tostring(strategy.opentrades.entry_price(oi), format.mintick) + " | " + str.format_time(strategy.opentrades.entry_time(oi), "dd/MM/yyyy HH:mm", "GMT+7")
+            curTxt += "\nTERISI @ " + str.tostring(pendEntry, format.mintick) + " | " + str.format_time(strategy.opentrades.entry_time(oi), "dd/MM/yyyy HH:mm", "GMT+7")
             filledNoted := true
             label.set_text(curLbl, "[ TERISI ]\n" + curTxt)
     lastTotal := totalTrades
 
-// 2) batalkan order limit yang sudah basi
+// 2) batalkan order kalau muncul swing baru (BUY: swing high, SELL: swing low) atau SL tersentuh sebelum terisi
 if pend and strategy.position_size == 0
     bool slTersentuh = pendIsSell ? high >= pendSL : low <= pendSL
-    if slTersentuh or bar_index - pendBar >= maxWait
+    bool swingBaru   = pendIsSell ? newSL : newSH
+    if slTersentuh or swingBaru
         strategy.cancel("SELL")
         strategy.cancel("SELL_EXIT")
         strategy.cancel("BUY")
         strategy.cancel("BUY_EXIT")
         pend := false
+        pendArmed := false
         if not na(curLbl)
-            curTxt += "\nDIBATALKAN: " + (slTersentuh ? "harga menyentuh level SL sebelum entry terisi" : "lewat " + str.tostring(maxWait) + " bar tanpa terisi") + " | " + str.format_time(time, "dd/MM/yyyy HH:mm", "GMT+7")
+            string alasan = ""
+            if swingBaru
+                int    sIdx = swIdx.get(swIdx.size() - 1)
+                float  sP   = swP.get(swP.size() - 1)
+                alasan := "Cancel Order : karena ada swing " + (pendIsSell ? "low" : "high") + " di " + str.tostring(sP, format.mintick) + " (" + str.format_time(timeArr.get(sIdx), "dd/MM/yyyy HH:mm", "GMT+7") + ")"
+            else
+                alasan := "Cancel Order : harga menyentuh level SL sebelum entry terisi | " + str.format_time(time, "dd/MM/yyyy HH:mm", "GMT+7")
+            curTxt += "\n" + alasan
             label.set_text(curLbl, "[ BATAL ]\n" + curTxt)
             curLbl := na
+
+// 2b) pasang order STOP hanya setelah harga berada di sisi yang benar
+//     BUY : close harus di BAWAH entry dulu, lalu harga naik menembus entry -> entry
+//     SELL: close harus di ATAS entry dulu, lalu harga turun menembus entry -> entry
+if pend and not pendArmed and strategy.position_size == 0
+    bool sisiBenar = pendIsSell ? close > pendEntry : close < pendEntry
+    if sisiBenar
+        if pendIsSell
+            strategy.entry("SELL", strategy.short, stop=pendEntry, comment=pendComment)
+            strategy.exit("SELL_EXIT", from_entry="SELL", stop=pendSL, limit=pendTP, comment_profit="TP", comment_loss="SL")
+        else
+            strategy.entry("BUY", strategy.long, stop=pendEntry, comment=pendComment)
+            strategy.exit("BUY_EXIT", from_entry="BUY", stop=pendSL, limit=pendTP, comment_profit="TP", comment_loss="SL")
+        pendArmed := true
+        if not na(curLbl)
+            curTxt += "\nORDER DIPASANG (harga sudah di sisi benar) | " + str.format_time(time, "dd/MM/yyyy HH:mm", "GMT+7")
+            label.set_text(curLbl, "[ PENDING ]\n" + curTxt)
 
 // 3) hitung TP / SL dari trade yang baru tertutup
 if strategy.closedtrades > lastClosed
@@ -937,7 +1022,7 @@ if strategy.closedtrades > lastClosed
 
         if not na(curLbl)
             if not filledNoted
-                curTxt += "\nTERISI @ " + str.tostring(strategy.closedtrades.entry_price(t), format.mintick) + " | " + str.format_time(strategy.closedtrades.entry_time(t), "dd/MM/yyyy HH:mm", "GMT+7")
+                curTxt += "\nTERISI @ " + str.tostring(pendEntry, format.mintick) + " | " + str.format_time(strategy.closedtrades.entry_time(t), "dd/MM/yyyy HH:mm", "GMT+7")
             curTxt += "\nHASIL: " + hasil
             label.set_text(curLbl, (win ? "[ TP KENA ]\n" : "[ SL KENA ]\n") + curTxt)
             curLbl := na
@@ -1064,24 +1149,50 @@ f_scan(float p618, int fromIdx, bool isSell, bool doScan) =>
 //  SELL: Swing Low baru terkonfirmasi -> 61.8 dari lembah ke gunung -> cari DBD
 //  BUY : Swing High baru terkonfirmasi -> 61.8 dari puncak ke lembah -> cari RBR
 // =====================================================================
-bool isSellSetup = newSL
-bool doSetup = use618 and time >= startTime and strategy.position_size == 0 and swP.size() >= 2 and ((newSL and useSell) or (newSH and useBuy))
+// pivot baru terdeteksi -> mulai menunggu konfirmasi (menggantikan yang lama)
+if (newSL or newSH) and swP.size() >= 2 and ((newSL and useSell) or (newSH and useBuy))
+    wOn       := true
+    wSell     := newSL
+    wI        := swIdx.get(swIdx.size() - 1)
+    wP        := swP.get(swP.size() - 1)
+    wPrevI    := swIdx.get(swIdx.size() - 2)
+    wPrevP    := swP.get(swP.size() - 2)
+    wPrevSame := swP.size() >= 3 ? swP.get(swP.size() - 3) : na
 
-int   lastI = na
-float lastP = na
-int   prevI = na
-float prevP = na
-if swP.size() >= 2
-    lastI := swIdx.get(swIdx.size() - 1)
-    lastP := swP.get(swP.size() - 1)
-    prevI := swIdx.get(swIdx.size() - 2)
-    prevP := swP.get(swP.size() - 2)
+// hitung candle close konfirmasi dari candle setelah swing sampai bar sekarang (tidak harus berurutan)
+int  cntKonf = 0
+bool fire    = false
+if wOn
+    if bar_index > wI
+        for j = wI + 1 to bar_index
+            if wSell
+                if clsArr.get(j) > clsArr.get(wI)
+                    cntKonf += 1
+            else
+                if clsArr.get(j) < clsArr.get(wI)
+                    cntKonf += 1
+
+    bool tembus  = wSell ? slArr.get(bar_index) < wP : shArr.get(bar_index) > wP
+    bool kadaluwarsa = bar_index - wI > maxWaitKonf
+
+    if not cekKonfirmasi or cntKonf >= nKonfirmasi
+        fire := true
+        wOn  := false
+    else if tembus or kadaluwarsa
+        wOn := false
+
+bool isSellSetup = wSell
+bool doSetup = fire and use618 and time >= startTime and strategy.position_size == 0
+
+int   lastI = wI
+float lastP = wP
+int   prevI = wPrevI
+float prevP = wPrevP
 
 bool  legOk    = false
 float p618     = na
-float prevSame = na     // swing sejenis sebelumnya (low untuk SELL, high untuk BUY)
+float prevSame = wPrevSame
 bool  beatOk   = true
-int   cntKonf  = 0
 bool  konfOk   = true
 if doSetup
     if isSellSetup
@@ -1091,27 +1202,11 @@ if doSetup
         legOk := lastP > prevP
         p618  := lastP - (lastP - prevP) * 0.618
 
-    // 1) swing harus mengalahkan swing sejenis sebelumnya
-    if swP.size() >= 3
-        prevSame := swP.get(swP.size() - 3)
     if cekBeatSwing
         if na(prevSame)
             beatOk := false
         else
             beatOk := isSellSetup ? lastP < prevSame : lastP > prevSame
-
-    // 2) hitung candle close konfirmasi setelah swing
-    //    SELL: close di atas HIGH candle swing low | BUY: close di bawah LOW candle swing high
-    if lastI < bar_index
-        for j = lastI + 1 to bar_index
-            if isSellSetup
-                if clsArr.get(j) > hiArr.get(lastI)
-                    cntKonf += 1
-            else
-                if clsArr.get(j) < loArr.get(lastI)
-                    cntKonf += 1
-    if cekKonfirmasi
-        konfOk := cntKonf >= nKonfirmasi
 
 bool swingOk = beatOk and konfOk
 
@@ -1174,18 +1269,22 @@ if doSetup
         float sl    = isSellSetup ? zt + buf : zb - buf
         float risk  = math.abs(sl - entry)
         float tp    = isSellSetup ? entry - rrMult * risk : entry + rrMult * risk
-        bool  entryOk = isSellSetup ? entry > close : entry < close
+        // bool  entryOk = isSellSetup ? entry > close : entry < close
         bool  sudahPakai = isSellSetup ? usedZ.includes(foundZ) : usedR.includes(foundZ)
 
         string status = ""
         bool   ordered = false
         if sudahPakai
             status := "SKIP: zona ini sudah pernah dipakai trade sebelumnya"
-        else if not entryOk
-            status := "SKIP: harga sekarang " + str.tostring(close, format.mintick) + " sudah lewat level entry " + str.tostring(entry, format.mintick) + (isSellSetup ? " (sell limit harus di atas harga)" : " (buy limit harus di bawah harga)")
         else
-            status  := (isSellSetup ? "SELL LIMIT" : "BUY LIMIT") + " @ " + str.tostring(entry, format.mintick) + " dipasang (PENDING, belum terisi)"
+            // BUY: harga harus di bawah entry dulu | SELL: harga harus di atas entry dulu
+            bool sisiBenar = isSellSetup ? close > entry : close < entry
             ordered := true
+            if sisiBenar
+                status := (isSellSetup ? "SELL" : "BUY") + " STOP @ " + str.tostring(entry, format.mintick) + " dipasang (PENDING, belum terisi)"
+            else
+                status := (isSellSetup ? "SELL" : "BUY") + " @ " + str.tostring(entry, format.mintick) + " MENUNGGU: harga harus " + (isSellSetup ? "naik di atas" : "turun di bawah") + " entry dulu, baru order dipasang"
+
             if pend and not na(curLbl)
                 curTxt += "\nDIBATALKAN: diganti setup baru"
                 label.set_text(curLbl, "[ BATAL ]\n" + curTxt)
@@ -1194,17 +1293,24 @@ if doSetup
             strategy.cancel("SELL_EXIT")
             strategy.cancel("BUY")
             strategy.cancel("BUY_EXIT")
-            if isSellSetup
-                strategy.entry("SELL", strategy.short, limit=entry, comment="DBD " + zGr)
-                strategy.exit("SELL_EXIT", from_entry="SELL", stop=sl, limit=tp, comment_profit="TP", comment_loss="SL")
-            else
-                strategy.entry("BUY", strategy.long, limit=entry, comment="RBR " + zGr)
-                strategy.exit("BUY_EXIT", from_entry="BUY", stop=sl, limit=tp, comment_profit="TP", comment_loss="SL")
-            pend       := true
-            pendIsSell := isSellSetup
-            pendZone   := foundZ
-            pendBar    := bar_index
-            pendSL     := sl
+
+            string cmt = (isSellSetup ? "DBD " : "RBR ") + zGr
+            if sisiBenar
+                if isSellSetup
+                    strategy.entry("SELL", strategy.short, stop=entry, comment=cmt)
+                    strategy.exit("SELL_EXIT", from_entry="SELL", stop=sl, limit=tp, comment_profit="TP", comment_loss="SL")
+                else
+                    strategy.entry("BUY", strategy.long, stop=entry, comment=cmt)
+                    strategy.exit("BUY_EXIT", from_entry="BUY", stop=sl, limit=tp, comment_profit="TP", comment_loss="SL")
+            pend        := true
+            pendIsSell  := isSellSetup
+            pendZone    := foundZ
+            pendBar     := bar_index
+            pendSL      := sl
+            pendEntry   := entry
+            pendTP      := tp
+            pendComment := cmt
+            pendArmed   := sisiBenar
 
         if showDebug
             string tTouch = str.format_time(timeArr.get(touchIdx), fmt, "GMT+7")
