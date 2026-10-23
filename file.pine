@@ -1,5 +1,5 @@
 //@version=5
-indicator("7Seas_PAC (v1.5)", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=200)
+indicator("7Seas_PAC (v1.8)", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=200)
 
 // =====================================================================
 //  INPUT
@@ -31,7 +31,7 @@ geserKiri      = 0
 // group Swing
 showSwing     = input.bool(true, "Show ZigZag Lines", group="Swing Indicator")
 // swingLookback = input.int(200, "Lookback (jumlah candle)", minval=20, group="Swing")
-swingMinBars  = 3
+swingMinBars  = 2
 swingHighCol  = color.red
 swingLowCol   = color.lime
 zzLineCol     = chart.fg_color
@@ -43,13 +43,16 @@ showLastSH      = showControlLine
 showLastSL      = showControlLine
 show618 = input.bool(false, "Show 61.8% Line", group="Swing Indicator")
 swingBasis = input.string("Wick", "Swing High/Low Source", options=["Body", "Wick"], group="Swing Indicator")
-swingAtrMult = 2.0
+swingAtrMult = 1.0
+showMinorLow  = true
+minorAtrMult  = 0.5
 
 showDbdSingle   = true
 showRbrSingle = true
 showDbdMultiple = true
 showRbrMultiple = true
 // backtestMode = input.bool(true, "Backtest Mode (buang zona yang sudah tersentuh harga)", group="Penanda")
+disableOverlap = input.bool(false, "Disable Overlap Score", group="Debug", tooltip="Uncheck (default): jika base candle beberapa zona DBD atau RBR saling berhimpit, hanya satu zona yang dipakai.\n1. Ambil zona dengan score tertinggi (A > B > C ...), terlepas Single atau Multiple.\n2. Jika score sama, ambil zona Single.\n\nCentang: aturan di atas TIDAK berlaku, semua zona tetap ditampilkan seperti sebelumnya.")
 
 inputMinGrade = input.string("K", "Min. Grade to Show", options=["A","B","C","D","E","F","G","H","I","J","K"], group="UFO / BASE", tooltip="Pilih C: tampil C, B, A. Pilih B: tampil B, A. K = tampilkan semua.")
 inputTinggiBodyBase = input.bool(true, "Base Body Height vs. Leg In/Out (Base Body Must Not Be Larger)", group="UFO / BASE")
@@ -62,6 +65,7 @@ showDebugLegin = input.bool(false, "DEBUG", group="Debug")
 devMode = input.bool(false, "DEV MODE", group="Debug", tooltip="Centang:\n- Error kode 4 (jarak base > 50% body leg in) dan kode 11 (jarak base > 50% body leg out) TIDAK mandatory, hanya jadi pengurang grade.\n- Error kode 7 dan 8 (body leg in/out < 60% tinggi candle) TIDAK mandatory, hanya jadi pengurang grade.\n- Error kode 1 (FVG Leg In tidak valid) ikut dihitung sebagai pengurang grade.\n- Validasi harga ketutup di kanan DINONAKTIFKAN (zona langsung digambar).\n\nUncheck:\n- Error kode 4 dan 11 MANDATORY.\n- Error kode 7 dan 8 MANDATORY (pola dibuang kalau body leg in/out < 60% tinggi candle).\n- Error kode 1 (FVG Leg In tidak valid) TIDAK dihitung sebagai skor.\n- Validasi harga ketutup di kanan AKTIF (zona yang sudah tersentuh harga dibuang, garis control hanya memakai zona yang masih aktif).")
 bool backtestMode = not devMode   // validasi harga ketutup AKTIF saat devMode uncheck
 
+swingLeft = 2
 
 var box   fibTopBox = na
 var box   fibBotBox = na
@@ -791,6 +795,15 @@ var array<int>  zActive = array.new<int>()
 var array<bool> rDead   = array.new<bool>()
 var array<int>  rActive = array.new<int>()
 
+var array<int>  zBaseL = array.new<int>()
+var array<int>  zBaseR = array.new<int>()
+var array<int>  zErr   = array.new<int>()
+var array<bool> zSupp  = array.new<bool>()
+var array<int>  rBaseL = array.new<int>()
+var array<int>  rBaseR = array.new<int>()
+var array<int>  rErr   = array.new<int>()
+var array<bool> rSupp  = array.new<bool>()
+
 var array<int>    rLeft   = array.new<int>()
 var array<int>    rRight  = array.new<int>()
 var array<float>  rTop    = array.new<float>()
@@ -964,6 +977,9 @@ if markRbr
     rTip.push(f_gradeTipRbr(errRbr, errCodeRbr))
     rIsMulti.push(false)
     rbrBaseZone.set(bar_index - 2, rTop.size() - 1)
+    rBaseL.push(bar_index - 2)
+    rBaseR.push(bar_index - 2)
+    rErr.push(errRbr)
 
 [nRbrMulti, errRbrM, errCodeRbrM] = f_rbr_multiple(MIN_BASE_T5, MAX_BASE_T5, wickPct, reqDrop)
 
@@ -985,6 +1001,9 @@ if markRbrMulti
     rText.push(f_gradeText(errRbrM, errCodeRbrM))
     rTip.push(f_gradeTipRbr(errRbrM, errCodeRbrM))
     rIsMulti.push(true)
+    rBaseL.push(bar_index - (nRbrMulti + 1))
+    rBaseR.push(bar_index - 2)
+    rErr.push(errRbrM)
 
     for d = 2 to nRbrMulti + 1
         rbrBaseZone.set(bar_index - d, rTop.size() - 1)
@@ -1053,6 +1072,9 @@ if markRectangleBase
     zShowLbl.push(showArrow)
     zShowBox.push(showDbdSingle)
     baseZone.set(bar_index - 2, zTop.size() - 1)
+    zBaseL.push(bar_index - 2)
+    zBaseR.push(bar_index - 2)
+    zErr.push(errSingle)
 
 // ---- simpan zona Multiple ----
 if nBaseMulti != 0 and barstate.isconfirmed and showDbdMultiple
@@ -1067,6 +1089,9 @@ if nBaseMulti != 0 and barstate.isconfirmed and showDbdMultiple
     zIsSingle.push(false)
     zShowLbl.push(showArrow)
     zShowBox.push(showDbdMultiple)
+    zBaseL.push(bar_index - (nBaseMulti + 1))
+    zBaseR.push(bar_index - 2)
+    zErr.push(errMulti)
     for d = 2 to nBaseMulti + 1
         baseZone.set(bar_index - d, zTop.size() - 1)
 
@@ -1162,6 +1187,23 @@ f_validSL(array<float> topA, array<float> botA, array<float> clsA, int pIdx, int
                     break
     cnt >= 2
 
+f_addPivot(array<float> p, array<int> ix, array<int> t, float price, int idx, int typ) =>
+    int n = t.size()
+    bool samaTipe = false
+    if n > 0
+        samaTipe := t.get(n - 1) == typ
+
+    if samaTipe
+        bool lebihEkstrem = typ == 1 ? price > p.get(n - 1) : price < p.get(n - 1)
+        if lebihEkstrem
+            p.set(n - 1, price)
+            ix.set(n - 1, idx)
+    else
+        p.push(price)
+        ix.push(idx)
+        t.push(typ)
+    0
+
 // =====================================================================
 // ZIGZAG SWING (berbasis BODY, seluruh candle yang ter-load)
 // Body puncak/dasar tiap bar disimpan di array -> tanpa batas lookback
@@ -1214,12 +1256,12 @@ f_baseAktif(int i) =>
     bool ok = false
     if i >= 0 and i < baseFlag.size()
         if baseFlag.get(i) == 1
+            int zid = baseZone.get(i)
             if not backtestMode
-                ok := true
+                // DEV MODE: zona mati tetap boleh, tapi zona yang kalah overlap tidak
+                ok := disableOverlap or zid >= 0
             else
-                int zid = baseZone.get(i)
                 if zid >= 0 and zid < zTop.size()
-                    // ok := not f_zonaInvalid(zTop.get(zid), zBot.get(zid), zStart.get(zid))
                     ok := not zDead.get(zid)
     ok
 
@@ -1249,12 +1291,11 @@ f_baseAktifRbr(int i) =>
     bool ok = false
     if i >= 0 and i < rbrBaseFlag.size()
         if rbrBaseFlag.get(i) == 1
+            int zid = rbrBaseZone.get(i)
             if not backtestMode
-                ok := true
+                ok := disableOverlap or zid >= 0
             else
-                int zid = rbrBaseZone.get(i)
                 if zid >= 0 and zid < rTop.size()
-                    // ok := not f_zonaInvalidRbr(rBot.get(zid), rStart.get(zid))
                     ok := not rDead.get(zid)
     ok
 
@@ -1276,6 +1317,72 @@ f_baseBottomAt(int i) =>
             b := math.min(b, loArr.get(j))
             j += 1
     b
+
+// true = zona j mengalahkan zona z
+f_overlapBeats(int j, bool sj, int ej, int z, bool sz, int ez) =>
+    ej < ez or (ej == ez and ((sj and not sz) or (sj == sz and j < z)))
+
+// Tandai zona yang kalah di area berhimpit, lalu bangun ulang pemetaan base -> zona
+// supaya Garis Control hanya melihat zona pemenang.
+f_overlapSupp(array<int> bl, array<int> br, array<int> er, array<bool> fl, bool flIsSingle, array<bool> dead, array<bool> supp, array<int> bz) =>
+    // pakai ukuran terkecil dari semua array supaya tidak keluar batas
+    int n = math.min(math.min(math.min(bl.size(), br.size()), math.min(er.size(), fl.size())), dead.size())
+
+    while supp.size() < bl.size()
+        supp.push(false)
+    // PENTING: loop Pine menghitung mundur kalau batas atas < batas bawah, jadi dijaga
+    if supp.size() > 0
+        for z = 0 to supp.size() - 1
+            supp.set(z, false)
+
+    if not disableOverlap and n > 1
+        for z = 0 to n - 1
+            bool sz = flIsSingle ? fl.get(z) : not fl.get(z)
+            int  ez = er.get(z)
+            bool kalah = false
+
+            // ke belakang (zona lebih lama)
+            int j = z - 1
+            while j >= 0
+                if br.get(j) < bl.get(z)
+                    break
+                if not backtestMode or not dead.get(j)
+                    bool sj = flIsSingle ? fl.get(j) : not fl.get(j)
+                    if f_overlapBeats(j, sj, er.get(j), z, sz, ez)
+                        kalah := true
+                        break
+                j -= 1
+
+            // ke depan (zona lebih baru)
+            if not kalah
+                j := z + 1
+                while j < n
+                    if br.get(j) - (MAX_BASE_T5 - 1) > br.get(z)
+                        break
+                    if bl.get(j) <= br.get(z) and (not backtestMode or not dead.get(j))
+                        bool sj = flIsSingle ? fl.get(j) : not fl.get(j)
+                        if f_overlapBeats(j, sj, er.get(j), z, sz, ez)
+                            kalah := true
+                            break
+                    j += 1
+
+            supp.set(z, kalah)
+
+        // bangun ulang pemetaan candle base -> zona (hanya pemenang)
+        for z = 0 to n - 1
+            int cFrom = math.max(bl.get(z), 0)
+            int cTo   = math.min(br.get(z), bz.size() - 1)
+            if cFrom <= cTo
+                for c = cFrom to cTo
+                    bz.set(c, -1)
+        for z = 0 to n - 1
+            if not supp.get(z)
+                int cFrom = math.max(bl.get(z), 0)
+                int cTo   = math.min(br.get(z), bz.size() - 1)
+                if cFrom <= cTo
+                    for c = cFrom to cTo
+                        bz.set(c, z)
+    0
 
 while topArr.size() <= bar_index
     topArr.push(0.0)
@@ -1330,6 +1437,10 @@ if rActive.size() > 0
 // gambar ulang hanya saat data historis selesai dimuat, lalu sekali di awal tiap bar baru
 bool doDraw = barstate.islastconfirmedhistory or (barstate.isrealtime and barstate.isnew)
 
+if doDraw or barstate.islast
+    f_overlapSupp(zBaseL, zBaseR, zErr, zIsSingle, true,  zDead, zSupp, baseZone)
+    f_overlapSupp(rBaseL, rBaseR, rErr, rIsMulti,  false, rDead, rSupp, rbrBaseZone)
+
 // DBD AREA
 if doDraw
     while zoneBoxes.size() > 0
@@ -1344,7 +1455,7 @@ if doDraw
 
             bool kena = f_zonaInvalid(zTop.get(z), zBot.get(z), zStart.get(z))
 
-            if not kena or devMode
+            if (not kena or devMode) and not zSupp.get(z)
                 bool  isSingle = zIsSingle.get(z)
                 color col      = isSingle ? color.blue : color.orange
 
@@ -1381,7 +1492,7 @@ if doDraw
 
             bool kena = f_zonaInvalidRbr(rBot.get(z), rStart.get(z))
 
-            if not kena or devMode
+            if (not kena or devMode) and not rSupp.get(z)
                 bool  isMulti = rIsMulti.get(z)
                 color col     = isMulti ? color.teal : color.green
 
@@ -1445,73 +1556,57 @@ if barstate.islast
         array<int>   swIdx = array.new_int()
         array<int>   swT   = array.new_int() 
 
-        // mulai dari bar pertama, leg awal = naik
-        int   dir    = 1
-        float extP   = shArr.get(0)
-        int   extIdx = 0
-        float oppP   = slArr.get(0)
-        int   oppIdx = 0
+        // ===== ZIGZAG PIVOT (longgar): 2 candle lebih ekstrem di kanan, tanpa ATR =====
+        int pvL = swingLeft
+        int pvNeed = 2
 
-        for idx = 1 to bar_index
-            float topB = shArr.get(idx)
-            float botB = slArr.get(idx)
+        if bar_index >= pvL + pvNeed
+            for idx = pvL to bar_index - pvNeed
+                float hh = shArr.get(idx)
+                float ll = slArr.get(idx)
+                bool isH = true
+                bool isL = true
 
-            if dir == 1
-                if topB > extP
-                    extP   := topB
-                    extIdx := idx
-                    oppP   := botB
-                    oppIdx := idx
-                else
-                    if botB < oppP
-                        oppP   := botB
-                        oppIdx := idx
-                    if (oppIdx - extIdx >= swingMinBars and f_validSH(topArr, botArr, extIdx, idx)) or (swingAtrMult > 0 and oppIdx > extIdx and extP - oppP >= swingAtrMult * atrArr.get(extIdx))
-                        swP.push(extP)
-                        swIdx.push(extIdx)
-                        swT.push(1)
-                        dir    := -1
-                        extP   := oppP
-                        extIdx := oppIdx
-                        oppP   := shArr.get(extIdx)
-                        oppIdx := extIdx
-                        for j = extIdx to idx
-                            if shArr.get(j) > oppP
-                                oppP   := shArr.get(j)
-                                oppIdx := j
-            else
-                if botB < extP
-                    extP   := botB
-                    extIdx := idx
-                    oppP   := topB
-                    oppIdx := idx
-                else
-                    if topB > oppP
-                        oppP   := topB
-                        oppIdx := idx
-                    if (oppIdx - extIdx >= swingMinBars and f_validSL(topArr, botArr, clsArr, extIdx, idx)) or (swingAtrMult > 0 and oppIdx > extIdx and oppP - extP >= swingAtrMult * atrArr.get(extIdx))
-                        swP.push(extP)
-                        swIdx.push(extIdx)
-                        swT.push(-1)
-                        dir    := 1
-                        extP   := oppP
-                        extIdx := oppIdx
-                        oppP   := slArr.get(extIdx)
-                        oppIdx := extIdx
-                        for j = extIdx to idx
-                            if slArr.get(j) < oppP
-                                oppP   := slArr.get(j)
-                                oppIdx := j
-            
+                // sisi kiri
+                for j = 1 to pvL
+                    if shArr.get(idx - j) > hh
+                        isH := false
+                    if slArr.get(idx - j) < ll
+                        isL := false
 
-        // swing terakhir (leg yang masih berjalan)
-        // puncak yang belum valid (belum ada 2 candle konfirmasi) tidak digambar
-        bool lastValid = dir == 1 ? f_validSH(topArr, botArr, extIdx, bar_index) : f_validSL(topArr, botArr, clsArr, extIdx, bar_index)
+                // sisi kanan, swing low
+                if isL
+                    int cntL = 0
+                    for j = 1 to bar_index - idx
+                        float lj = slArr.get(idx + j)
+                        if lj < ll
+                            break
+                        if lj > ll
+                            cntL += 1
+                            if cntL >= pvNeed
+                                break
+                    isL := cntL >= pvNeed
 
-        if lastValid
-            swP.push(extP)
-            swIdx.push(extIdx)
-            swT.push(dir)
+                // sisi kanan, swing high
+                if isH
+                    int cntH = 0
+                    for j = 1 to bar_index - idx
+                        float hj = shArr.get(idx + j)
+                        if hj > hh
+                            break
+                        if hj < hh
+                            cntH += 1
+                            if cntH >= pvNeed
+                                break
+                    isH := cntH >= pvNeed
+
+                if isL
+                    f_addPivot(swP, swIdx, swT, ll, idx, -1)
+                if isH
+                    f_addPivot(swP, swIdx, swT, hh, idx, 1)
+
+        
+       
 
         // cari swing high terakhir (dari belakang)
         int   lastSHIdx   = na
