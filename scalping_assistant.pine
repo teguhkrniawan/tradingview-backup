@@ -1,0 +1,142 @@
+//@version=6
+indicator('7seas_scalping_assistant', overlay = true, max_bars_back = 200, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
+
+// Angka versi di akhir harus sama dengan versi publish library seven_seas_core (lihat halaman script library)
+import michelle_lawardi/seven_seas_core/1 as core
+
+// =====================================================================
+//  INPUT
+// =====================================================================
+gDet = 'UFO / BASE'
+inSens = input.string('LOW', 'Select Sensitivity', options = ['LOW', 'MEDIUM', 'HIGH'], group = gDet)
+inAvgLb = input.int(100, 'Avg Body Lookback (Candles)', minval = 1, step = 1, group = gDet, tooltip = 'Jika diubah lebih dari 190, naikkan max_bars_back di indicator().')
+inMinGrade = input.string('K', 'Min. Grade to Show', options = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K'], group = gDet, tooltip = 'Pilih C: tampil C, B, A. Pilih B: tampil B, A. K = tampilkan semua.')
+inBaseBody = input.bool(true, 'Base Body Height vs. Leg In/Out (Base Body Must Not Be Larger)', group = gDet)
+
+gShow = 'Tampilan'
+inShowDbd = input.bool(true, 'Show DBD Zones', group = gShow)
+inShowRbr = input.bool(true, 'Show RBR Zones', group = gShow)
+inShowLbl = input.bool(true, 'Show Grade Labels', group = gShow)
+
+
+gSw = 'Swing Indicator'
+inShowZZ = input.bool(true, 'Show ZigZag Lines', group = gSw)
+inSwBasis = input.string('Wick', 'Swing High/Low Source', options = ['Body', 'Wick'], group = gSw)
+
+gDbg = 'Debug'
+inOverlap = input.bool(false, 'Disable Overlap Score', group = gDbg)
+inDevMode = input.bool(false, 'DEV MODE', group = gDbg, tooltip = 'Centang: error kode 4, 7, 8, 11 tidak mandatory (hanya pengurang grade) dan zona yang sudah tersentuh harga tetap digambar.')
+
+inShowCtrl = input.bool(true, 'Show Control Line', group = gSw)
+inPinkCol = input.color(color.rgb(255, 105, 180), 'Upper Zone Color (Swing High Control Line)', group = gSw)
+inGreenCol = input.color(color.lime, 'Lower Zone Color (Swing Low Control Line)', group = gSw)
+
+inGapCnt = input.int(4, 'Jumlah Gap Garis Zona', minval = 1, maxval = 20, group = gSw, tooltip = 'Jumlah gap di tiap zona. Isi 4 berarti terbentuk 5 garis di zona atas dan 5 garis di zona bawah.')
+
+// =====================================================================
+//  CORE
+// =====================================================================
+var cfg = core.Config.new(sensitivity = inSens, devMode = inDevMode, avgLookback = inAvgLb, minGrade = inMinGrade, baseBodyCheck = inBaseBody, disableOverlap = inOverlap, swingBasis = inSwBasis)
+var store = core.newStore(cfg)
+
+// WAJIB dipanggil di setiap bar
+[newDbd, newRbr] = core.update(store)
+
+alertcondition(newDbd, 'DBD baru', 'Zona DBD baru terbentuk')
+alertcondition(newRbr, 'RBR baru', 'Zona RBR baru terbentuk')
+
+// =====================================================================
+//  DRAWING STATE
+// =====================================================================
+var array<box> bxs = array.new<box>()
+var array<label> lbs = array.new<label>()
+var array<line> lns = array.new<line>()
+
+// =====================================================================
+//  GAMBAR (hanya di bar terakhir)
+//  Semua objek ditempel ke nomor candle (xloc.bar_index) supaya selalu
+//  pas di candle yang sama saat chart digeser / di-scale.
+//  Batas TradingView: objek maksimal ~9999 candle ke belakang.
+// =====================================================================
+if barstate.islast
+    int minX = bar_index - 4900
+
+    while bxs.size() > 0
+        box.delete(bxs.pop())
+    while lbs.size() > 0
+        label.delete(lbs.pop())
+    while lns.size() > 0
+        line.delete(lns.pop())
+
+    core.resolveOverlap(store)
+
+    // ---------- Zona DBD ----------
+    if inShowDbd and store.dbd.size() > 0
+        int drawn = 0
+        for zi = store.dbd.size() - 1 to 0
+            if drawn >= 240
+                break
+            core.Zone zn = store.dbd.get(zi)
+            if core.zoneVisible(store, zn) and zn.right >= minX
+                color col = zn.isSingle ? color.blue : color.orange
+                bxs.push(box.new(left = math.max(zn.left, minX), top = zn.top, right = zn.right, bottom = zn.bot, xloc = xloc.bar_index, border_color = col, border_width = 1, bgcolor = color.new(col, 85)))
+                if inShowLbl and zn.lblX >= minX
+                    lbs.push(label.new(x = zn.lblX, y = zn.top, xloc = xloc.bar_index, text = zn.txt, style = label.style_label_down, color = zn.isSingle ? color.yellow : color.orange, textcolor = color.black, size = size.tiny, tooltip = core.tipKena(zn.tip, zn.dead, 'Harga sudah menyentuh ekor atas base di kanan')))
+                drawn += 1
+
+    // ---------- Zona RBR ----------
+    if inShowRbr and store.rbr.size() > 0
+        int drawn = 0
+        for zi = store.rbr.size() - 1 to 0
+            if drawn >= 240
+                break
+            core.Zone zn = store.rbr.get(zi)
+            if core.zoneVisible(store, zn) and zn.right >= minX
+                color col = zn.isSingle ? color.green : color.teal
+                bxs.push(box.new(left = math.max(zn.left, minX), top = zn.top, right = zn.right, bottom = zn.bot, xloc = xloc.bar_index, border_color = col, border_width = 1, bgcolor = color.new(col, 85)))
+                if inShowLbl and zn.lblX >= minX
+                    lbs.push(label.new(x = zn.lblX, y = zn.bot, xloc = xloc.bar_index, text = zn.txt, style = label.style_label_up, color = col, textcolor = zn.isSingle ? color.black : color.white, size = size.tiny, tooltip = core.tipKena(zn.tip, zn.dead, 'Harga sudah menyentuh ekor bawah base di kanan')))
+                drawn += 1
+
+    // ---------- Swing (ZigZag) ----------
+    [swP, swIdx, swT] = core.swingPivots(store)
+
+    if inShowZZ and swP.size() > 1
+        int st = math.max(1, swP.size() - 300)
+        for k = st to swP.size() - 1
+            int xa = swIdx.get(k - 1)
+            int xb = swIdx.get(k)
+            if xa >= minX
+                lns.push(line.new(x1 = xa, y1 = swP.get(k - 1), x2 = xb, y2 = swP.get(k), xloc = xloc.bar_index, color = chart.fg_color, width = 1))
+
+    // ---------- Garis Control ----------
+    pink = core.controlLine(store, true, swP, swIdx, swT)
+    green = core.controlLine(store, false, swP, swIdx, swT)
+
+    int pinkX = pink.exists ? math.max(pink.valid and not na(pink.hitIdx) ? pink.hitIdx : pink.swingIdx, minX) : na
+    int greenX = green.exists ? math.max(green.valid and not na(green.hitIdx) ? green.hitIdx : green.swingIdx, minX) : na
+
+    if inShowCtrl and pink.exists
+        lns.push(line.new(x1 = pinkX, y1 = pink.price, x2 = bar_index, y2 = pink.price, xloc = xloc.bar_index, extend = extend.right, color = inPinkCol, style = pink.valid ? line.style_solid : line.style_dashed, width = 2))
+        lbs.push(label.new(x = bar_index + 3, y = pink.price, xloc = xloc.bar_index, text = core.controlText(store, pink, true), style = label.style_label_lower_left, color = color.new(color.black, 20), textcolor = inPinkCol, textalign = text.align_left, size = size.small))
+
+    if inShowCtrl and green.exists
+        lns.push(line.new(x1 = greenX, y1 = green.price, x2 = bar_index, y2 = green.price, xloc = xloc.bar_index, extend = extend.right, color = inGreenCol, style = green.valid ? line.style_solid : line.style_dashed, width = 2))
+        lbs.push(label.new(x = bar_index + 3, y = green.price, xloc = xloc.bar_index, text = core.controlText(store, green, false), style = label.style_label_upper_left, color = color.new(color.black, 20), textcolor = inGreenCol, textalign = text.align_left, size = size.small))
+
+    // ---------- Zona Entry (25%) ----------
+    if pink.exists and green.exists and pink.price > green.price
+        [topB, botB, tpP] = core.fibZones(pink.price, green.price, 0.25)
+        int fibLeft = math.max(pinkX, greenX)
+        bxs.push(box.new(left = fibLeft, top = pink.price, right = bar_index, bottom = topB, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(inPinkCol, 100), bgcolor = color.new(inPinkCol, 80)))
+        bxs.push(box.new(left = fibLeft, top = botB, right = bar_index, bottom = green.price, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(inGreenCol, 100), bgcolor = color.new(inGreenCol, 80)))
+        lns.push(line.new(x1 = fibLeft, y1 = tpP, x2 = bar_index, y2 = tpP, xloc = xloc.bar_index, extend = extend.right, color = color.gray, width = 2))
+
+        for g = 0 to inGapCnt
+            float f = g / float(inGapCnt)
+            float yUp = pink.price - (pink.price - topB) * f
+            float yLo = botB + (green.price - botB) * f
+            lns.push(line.new(x1 = fibLeft, y1 = yUp, x2 = bar_index, y2 = yUp, xloc = xloc.bar_index, extend = extend.right, color = inPinkCol, width = 1))
+            lns.push(line.new(x1 = fibLeft, y1 = yLo, x2 = bar_index, y2 = yLo, xloc = xloc.bar_index, extend = extend.right, color = inGreenCol, width = 1))
+            lbs.push(label.new(x = fibLeft, y = yUp, xloc = xloc.bar_index, text = str.tostring(inGapCnt - g + 1), style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
+            lbs.push(label.new(x = fibLeft, y = yLo, xloc = xloc.bar_index, text = str.tostring(g + 1), style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))

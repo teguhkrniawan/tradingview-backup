@@ -1,0 +1,1188 @@
+//@version=6
+
+// =====================================================================
+//  7seas_core  (library)
+//  Inti logika dari 7Seas_PAC v1.9:
+//   - deteksi pola DBD / RBR (Single & Multiple) + grading
+//   - validasi zona (dead / overlap)
+//   - ZigZag swing + Garis Control (pink = DBD, hijau = RBR)
+//
+//  Library TIDAK menggambar apa pun dan TIDAK punya input().
+//  Semua setting masuk lewat objek Config, semua state disimpan di Store.
+//
+//  CATATAN PENTING untuk indicator pemanggil:
+//   - Panggil update(store) di SETIAP bar (jangan di dalam if)
+//   - Set max_bars_back minimal 200 di indicator()
+// =====================================================================
+library('seven_seas_core', overlay = true)
+
+// =====================================================================
+//  TYPES
+// =====================================================================
+
+// Semua setting (pengganti input di indikator lama)
+export type Config
+	string sensitivity = 'LOW' // "LOW" | "MEDIUM" | "HIGH"
+	bool devMode = false
+	int avgLookback = 100 // Avg Body Lookback
+	string minGrade = 'K' // grade terburuk yang masih ditampilkan (A..K)
+	bool baseBodyCheck = true // body base tidak boleh > body leg in / leg out
+	bool disableOverlap = false
+	bool reqDrop = true
+	int minBase = 2 // base multiple minimal
+	int maxBase = 6 // base multiple maksimal
+	string swingBasis = 'Wick' // "Wick" | "Body"
+	int swingLeft = 2
+	int swingNeed = 2
+
+// Satu zona (DBD atau RBR)
+export type Zone
+	int left
+	int right
+	float top
+	float bot
+	int start // bar_index saat zona terbentuk
+	int lblX
+	string txt // huruf grade
+	string tip // tooltip grade
+	bool isSingle // true = Single, false = Multiple
+	int baseL
+	int baseR
+	int err // jumlah error (0 = grade A)
+	bool dead = false // ekor base sudah tertabrak body di kanan
+	bool supp = false // kalah overlap dengan zona lain
+
+// Seluruh state library
+export type Store
+	Config cfg
+	array<float> topA // puncak body
+	array<float> botA // dasar body
+	array<float> hiA // high
+	array<float> loA // low
+	array<float> shA // harga acuan swing high
+	array<float> slA // harga acuan swing low
+	array<float> clsA // close
+	array<int> timeA
+	array<int> patFlag // candle bagian pola DBD
+	array<int> baseFlag // candle base DBD
+	array<int> baseZone // index zona DBD per candle base
+	array<int> rbrPat
+	array<int> rbrBaseFlag
+	array<int> rbrBaseZone
+	array<Zone> dbd
+	array<Zone> rbr
+	array<int> dbdActive // index zona DBD yang belum mati
+	array<int> rbrActive
+
+// Hasil pencarian Garis Control
+export type ControlLine
+	bool exists = false
+	float price
+	bool valid = false // true = kena base (garis solid)
+	int swingIdx // index swing high/low terakhir
+	int hitIdx // index candle base yang kena
+	int refIdx // puncak/lembah acuan akhir
+	bool viaLegIn = false
+	int legInIdx
+	int x1Time // waktu titik awal garis
+	array<string> notes
+
+// Buat Store baru. Pakai:  var store = core.newStore(cfg)
+export newStore(Config cfg) =>
+    Store.new(cfg = cfg, topA = array.new_float(), botA = array.new_float(), hiA = array.new_float(), loA = array.new_float(), shA = array.new_float(), slA = array.new_float(), clsA = array.new_float(), timeA = array.new_int(), patFlag = array.new_int(), baseFlag = array.new_int(), baseZone = array.new_int(), rbrPat = array.new_int(), rbrBaseFlag = array.new_int(), rbrBaseZone = array.new_int(), dbd = array.new<Zone>(), rbr = array.new<Zone>(), dbdActive = array.new_int(), rbrActive = array.new_int())
+
+// =====================================================================
+//  FUNGSI CANDLE DASAR
+// =====================================================================
+export body(float o, float c) =>
+    math.abs(c - o)
+
+export upperWick(float o, float h, float c) =>
+    h - math.max(o, c)
+
+export lowerWick(float o, float l, float c) =>
+    math.min(o, c) - l
+
+export totalWick(float o, float h, float l, float c) =>
+    upperWick(o, h, c) + lowerWick(o, l, c)
+
+export isDrop(float o, float c) =>
+    c <= o
+
+export isBullish(float o, float c) =>
+    c >= o
+
+// Konversi selisih harga ke pip (JPY x100, XAU x1, lainnya x10000)
+export pip(float angka) =>
+    float hasil = 0.0
+    if str.contains(syminfo.ticker, 'JPY')
+        hasil := math.round(angka * 100)
+        hasil
+    else if str.contains(syminfo.ticker, 'XAU')
+        hasil := math.round(angka * 1)
+        hasil
+    else
+        hasil := math.round(angka * 10000)
+        hasil
+    hasil
+
+// Rata-rata body dari candle yang body-nya > total ekor
+export avgBody(Config cfg, int offset) =>
+    float total = 0.0
+    int cnt = 0
+    for i = 1 + offset to cfg.avgLookback + offset by 1
+        float b = math.abs(close[i] - open[i])
+        float w = totalWick(open[i], high[i], low[i], close[i])
+        if b > w
+            total := total + b
+            cnt := cnt + 1
+            cnt
+    cnt > 0 ? total / cnt : 0.0
+
+// true kalau body >= rata-rata body (error kode 5 / 6)
+export bodyAvgOk(Config cfg, float o, float c, int offset) =>
+    pip(body(o, c)) >= pip(avgBody(cfg, offset))
+
+// Kode 7: body leg in >= 60% tinggi candle
+export legInBodyOk(float o, float h, float l, float c) =>
+    float tinggi = h - l
+    tinggi > 0 and body(o, c) >= tinggi * 0.6
+
+// Kode 8: body leg out >= 60% tinggi candle
+export legOutBodyOk(float o, float h, float l, float c) =>
+    float tinggi = h - l
+    tinggi > 0 and body(o, c) >= tinggi * 0.6
+
+// =====================================================================
+//  VALIDASI CANDLE BASE
+// =====================================================================
+
+// Base DBD (dan RBR Multiple): candle bearish bertubuh besar tidak lolos
+wickOkBull(Config cfg, float o, float h, float l, float c, int offset) =>
+    pip(body(o, c)) < pip(avgBody(cfg, offset)) or pip(totalWick(o, h, l, c)) >= pip(body(o, c)) or isBullish(o, c) and pip(body(o, c)) > pip(totalWick(o, h, l, c))
+
+// Base RBR Single: cermin, candle bearish bertubuh besar dianggap OK
+wickOkBear(Config cfg, float o, float h, float l, float c, int offset) =>
+    pip(body(o, c)) < pip(avgBody(cfg, offset)) or pip(totalWick(o, h, l, c)) >= pip(body(o, c)) or isDrop(o, c) and pip(body(o, c)) > pip(totalWick(o, h, l, c))
+
+baseMultipleOk(Config cfg, int nBase) =>
+    bool ok = true
+    for j = 2 to nBase + 1 by 1
+        if not wickOkBull(cfg, open[j], high[j], low[j], close[j], j)
+            ok := false
+            ok
+    ok
+
+// Kode 9 (DBD): semua ekor atas base <= open leg in
+baseAtasOk(int nBase) =>
+    float openLegIn = open[nBase + 2]
+    bool ok = true
+    for j = 2 to nBase + 1 by 1
+        if high[j] > openLegIn
+            ok := false
+            ok
+    ok
+
+// Kode 10 (DBD): semua ekor bawah base >= low leg out
+baseBawahOk(int nBase) =>
+    float lowLegOut = low[1]
+    bool ok = true
+    for j = 2 to nBase + 1 by 1
+        if low[j] < lowLegOut
+            ok := false
+            ok
+    ok
+
+// Kode 9 (RBR): semua ekor bawah base >= low leg in
+baseBawahRbrOk(int nBase) =>
+    float lowLegIn = low[nBase + 2]
+    bool ok = true
+    for j = 2 to nBase + 1 by 1
+        if low[j] < lowLegIn
+            ok := false
+            ok
+    ok
+
+// Kode 10 (RBR): semua ekor atas base <= high leg out
+baseAtasRbrOk(int nBase) =>
+    float highLegOut = high[1]
+    bool ok = true
+    for j = 2 to nBase + 1 by 1
+        if high[j] > highLegOut
+            ok := false
+            ok
+    ok
+
+// Jarak base = puncak body tertinggi - dasar body terendah
+jarakBase(int nBase) =>
+    float puncak = na
+    float dasar = na
+    for j = 2 to nBase + 1 by 1
+        float atasBody = math.max(open[j], close[j])
+        float bawahBody = math.min(open[j], close[j])
+        puncak := na(puncak) ? atasBody : math.max(puncak, atasBody)
+        dasar := na(dasar) ? bawahBody : math.min(dasar, bawahBody)
+        dasar
+    puncak - dasar
+
+jarakBaseOk(int nBase, float maxRasio) =>
+    float jarak = jarakBase(nBase)
+    float bodyLegIn = body(open[nBase + 2], close[nBase + 2])
+    float bodyLegOut = body(open[1], close[1])
+    jarak <= bodyLegIn * maxRasio and jarak <= bodyLegOut * maxRasio
+
+// Kode 4
+jarakBaseLegInOk(int nBase, float maxRasio) =>
+    jarakBase(nBase) <= body(open[nBase + 2], close[nBase + 2]) * maxRasio
+
+// Kode 11
+jarakBaseLegOutOk(int nBase, float maxRasio) =>
+    jarakBase(nBase) <= body(open[1], close[1]) * maxRasio
+
+// Body tiap base tidak boleh > body leg in / leg out
+baseBodyOk(Config cfg, int nBase) =>
+    bool ok = true
+    if cfg.baseBodyCheck
+        float bodyLegIn = body(open[nBase + 2], close[nBase + 2])
+        float bodyLegOut = body(open[1], close[1])
+        for j = 2 to nBase + 1 by 1
+            float bodyBase = body(open[j], close[j])
+            if bodyBase > bodyLegIn or bodyBase > bodyLegOut
+                ok := false
+                ok
+    ok
+
+export baseTop(int nBase) =>
+    float t = high[2]
+    for j = 3 to nBase + 1 by 1
+        t := math.max(t, high[j])
+        t
+    t
+
+export baseBottom(int nBase) =>
+    float b = low[2]
+    for j = 3 to nBase + 1 by 1
+        b := math.min(b, low[j])
+        b
+    b
+
+// =====================================================================
+//  FVG
+// =====================================================================
+fvgInDbd(float lowLeft, float highRight) =>
+    lowLeft > highRight
+
+fvgOutDbd(float lowLeft, float highRight) =>
+    lowLeft > highRight
+
+fvgInRbr(float highLeft, float lowRight) =>
+    highLeft < lowRight
+
+fvgOutRbr(float highLeft, float lowRight) =>
+    highLeft < lowRight
+
+// =====================================================================
+//  LEG IN / LEG OUT
+// =====================================================================
+legInValidDbd(Config cfg, float o, float h, float l, float c) =>
+    isDrop(o, c) and (cfg.devMode or legInBodyOk(o, h, l, c))
+
+legOutValidDbd(Config cfg, float o, float h, float l, float c, float openLegIn, float closeLegIn) =>
+    bool posisiOk = c < closeLegIn and o < openLegIn
+    if cfg.sensitivity == 'HIGH'
+        isDrop(o, c) and body(o, c) > totalWick(o, h, l, c) and posisiOk
+    else if cfg.sensitivity == 'MEDIUM'
+        isDrop(o, c) and body(o, c) >= totalWick(o, h, l, c) and posisiOk
+    else
+        isDrop(o, c) and posisiOk and (cfg.devMode or legOutBodyOk(o, h, l, c))
+
+legInValidRbr(Config cfg, float o, float h, float l, float c) =>
+    if cfg.sensitivity == 'HIGH'
+        isBullish(o, c) and body(o, c) > totalWick(o, h, l, c)
+    else if cfg.sensitivity == 'MEDIUM'
+        isBullish(o, c) and body(o, c) >= totalWick(o, h, l, c)
+    else
+        isBullish(o, c) and (cfg.devMode or legInBodyOk(o, h, l, c))
+
+legOutValidRbr(Config cfg, float o, float h, float l, float c, float openLegIn, float closeLegIn) =>
+    bool posisiOk = c > closeLegIn and o > openLegIn
+    if cfg.sensitivity == 'HIGH'
+        isBullish(o, c) and body(o, c) > totalWick(o, h, l, c) and posisiOk
+    else if cfg.sensitivity == 'MEDIUM'
+        isBullish(o, c) and body(o, c) >= totalWick(o, h, l, c) and posisiOk
+    else
+        isBullish(o, c) and posisiOk and (cfg.devMode or legOutBodyOk(o, h, l, c))
+
+// =====================================================================
+//  GRADE & TOOLTIP
+// =====================================================================
+export gradeText(int errCount) =>
+    int idx = math.min(errCount, 25)
+    str.substring('ABCDEFGHIJKLMNOPQRSTUVWXYZ', idx, idx + 1)
+
+// index grade dari huruf (A = 0 ... K = 10)
+export gradeIdx(string g) =>
+    str.pos('ABCDEFGHIJK', g)
+
+errDesc(bool isRbr, string code) =>
+    switch code
+        '1' => 'FVG Leg In tidak valid'
+        '2' => 'FVG Leg Out tidak valid'
+        '3' => 'Tanpa FVG'
+        '4' => 'Jarak base > 50% body leg in'
+        '5' => 'Body leg in < AVG body'
+        '6' => 'Body leg out < AVG body'
+        '7' => 'Body leg in < 60% tinggi candle'
+        '8' => 'Body leg out < 60% tinggi candle'
+        '9' => isRbr ? 'Ekor bawah base menembus ekor bawah leg in' : 'Ekor atas base menembus open leg in'
+        '10' => isRbr ? 'Ekor atas base melewati ekor atas leg out' : 'Ekor bawah base turun di bawah low leg out'
+        '11' => 'Jarak base > 50% body leg out'
+        '12' => 'Harga sudah menyentuh zona di kanan'
+        => 'Kode tidak dikenal'
+
+isMandatory(string code) =>
+    code == '4' or code == '7' or code == '8' or code == '11' or code == '12'
+
+export gradeTip(bool isRbr, int errCount, string errCodes) =>
+    string t = (isRbr ? 'RBR Grade ' : 'Grade ') + gradeText(errCount)
+    if errCount == 0
+        t := t + '\nTidak ada error'
+        t
+    else
+        array<string> codes = str.split(errCodes, ' ')
+        string tNon = ''
+        string tMand = ''
+        for k = 0 to codes.size() - 1 by 1
+            string c = codes.get(k)
+            if c != ''
+                string baris = '\n[' + c + '] ' + errDesc(isRbr, c)
+                if isMandatory(c)
+                    tMand := tMand + baris
+                    tMand
+                else
+                    tNon := tNon + baris
+                    tNon
+        if tNon != ''
+            t := t + '\n\nNon mandatory (skor):' + tNon
+            t
+        if tMand != ''
+            t := t + '\n\nMandatory (lolos karena DEV MODE):' + tMand
+            t
+    t
+
+// Tambahkan pesan "harga kena di kanan" ke tooltip
+export tipKena(string tip, bool kena, string pesan) =>
+    string t = tip
+    if kena
+        if str.contains(t, 'Mandatory (lolos')
+            t := t + '\n[12] ' + pesan
+            t
+        else
+            t := t + '\n\nMandatory (lolos karena DEV MODE):\n[12] ' + pesan
+            t
+    t
+
+// =====================================================================
+//  DETEKSI POLA  (return: [valid / n base, jumlah error, kode error])
+//  Semua dievaluasi relatif terhadap bar saat ini:
+//   C1 = [3] leg in, C2 = [2] base, C3 = [1] leg out
+// =====================================================================
+export dbdSingle(Config cfg) =>
+    float o1 = open[3]
+    float h1 = high[3]
+    float l1 = low[3]
+    float c1 = close[3]
+    float o2 = open[2]
+    float h2 = high[2]
+    float l2 = low[2]
+    float c2 = close[2]
+    float o3 = open[1]
+    float h3 = high[1]
+    float l3 = low[1]
+    float c3 = close[1]
+
+    bool okLegIn = legInValidDbd(cfg, o1, h1, l1, c1)
+    bool okCandle2 = wickOkBull(cfg, o2, h2, l2, c2, 2)
+    bool okLegOut = legOutValidDbd(cfg, o3, h3, l3, c3, o1, c1)
+    bool okFvgIn = fvgInDbd(low[4], high[2])
+    bool okFvgOut = fvgOutDbd(low[2], high[0])
+    bool dropOK = not cfg.reqDrop or isDrop(o1, c1) and isDrop(o3, c3)
+
+    bool jarakOk = jarakBaseOk(1, 0.5)
+    bool jarakInOk = jarakBaseLegInOk(1, 0.5)
+    bool jarakOutOk = jarakBaseLegOutOk(1, 0.5)
+
+    bool polaOk = okLegIn and okLegOut and okCandle2 and dropOK and baseBodyOk(cfg, 1) and (cfg.devMode or jarakOk)
+    bool tanpaFvg = not okFvgIn and not okFvgOut
+    bool valid = polaOk and (not tanpaFvg or cfg.sensitivity == 'LOW')
+
+    int errCount = 0
+    string errCodes = ''
+
+    if valid
+        if not okFvgOut
+            errCount := errCount + 1
+            errCodes := errCodes + '2 '
+            errCodes
+        if not jarakInOk
+            errCount := errCount + 1
+            errCodes := errCodes + '4 '
+            errCodes
+        if not jarakOutOk
+            errCount := errCount + 1
+            errCodes := errCodes + '11 '
+            errCodes
+        if not bodyAvgOk(cfg, o1, c1, 3)
+            errCount := errCount + 1
+            errCodes := errCodes + '5 '
+            errCodes
+        if not bodyAvgOk(cfg, o3, c3, 1)
+            errCount := errCount + 1
+            errCodes := errCodes + '6 '
+            errCodes
+        if not legInBodyOk(o1, h1, l1, c1)
+            errCount := errCount + 1
+            errCodes := errCodes + '7 '
+            errCodes
+        if not legOutBodyOk(o3, h3, l3, c3)
+            errCount := errCount + 1
+            errCodes := errCodes + '8 '
+            errCodes
+        if h2 > o1
+            errCount := errCount + 1
+            errCodes := errCodes + '9 '
+            errCodes
+        if l2 < c3
+            errCount := errCount + 1
+            errCodes := errCodes + '10 '
+            errCodes
+
+    [valid, errCount, str.trim(errCodes)]
+
+export rbrSingle(Config cfg) =>
+    float o1 = open[3]
+    float h1 = high[3]
+    float l1 = low[3]
+    float c1 = close[3]
+    float o2 = open[2]
+    float h2 = high[2]
+    float l2 = low[2]
+    float c2 = close[2]
+    float o3 = open[1]
+    float h3 = high[1]
+    float l3 = low[1]
+    float c3 = close[1]
+
+    bool okLegIn = legInValidRbr(cfg, o1, h1, l1, c1)
+    bool okCandle2 = wickOkBear(cfg, o2, h2, l2, c2, 2)
+    bool okLegOut = legOutValidRbr(cfg, o3, h3, l3, c3, o1, c1)
+    bool okFvgIn = fvgInRbr(high[4], low[2])
+    bool okFvgOut = fvgOutRbr(high[2], low[0])
+    bool rallyOK = not cfg.reqDrop or isBullish(o1, c1) and isBullish(o3, c3)
+
+    bool jarakOk = jarakBaseOk(1, 0.5)
+    bool jarakInOk = jarakBaseLegInOk(1, 0.5)
+    bool jarakOutOk = jarakBaseLegOutOk(1, 0.5)
+
+    bool polaOk = okLegIn and okLegOut and okCandle2 and rallyOK and baseBodyOk(cfg, 1) and (cfg.devMode or jarakOk)
+    bool tanpaFvg = not okFvgIn and not okFvgOut
+    bool valid = polaOk and (not tanpaFvg or cfg.sensitivity == 'LOW')
+
+    int errCount = 0
+    string errCodes = ''
+
+    if valid
+        if not okFvgOut
+            errCount := errCount + 1
+            errCodes := errCodes + '2 '
+            errCodes
+        if not jarakInOk
+            errCount := errCount + 1
+            errCodes := errCodes + '4 '
+            errCodes
+        if not jarakOutOk
+            errCount := errCount + 1
+            errCodes := errCodes + '11 '
+            errCodes
+        if not bodyAvgOk(cfg, o1, c1, 3)
+            errCount := errCount + 1
+            errCodes := errCodes + '5 '
+            errCodes
+        if not bodyAvgOk(cfg, o3, c3, 1)
+            errCount := errCount + 1
+            errCodes := errCodes + '6 '
+            errCodes
+        if not legInBodyOk(o1, h1, l1, c1)
+            errCount := errCount + 1
+            errCodes := errCodes + '7 '
+            errCodes
+        if not legOutBodyOk(o3, h3, l3, c3)
+            errCount := errCount + 1
+            errCodes := errCodes + '8 '
+            errCodes
+        if l2 < l1
+            errCount := errCount + 1
+            errCodes := errCodes + '9 '
+            errCodes
+        if h2 > h3
+            errCount := errCount + 1
+            errCodes := errCodes + '10 '
+            errCodes
+
+    [valid, errCount, str.trim(errCodes)]
+
+// n base = 0 berarti pola tidak ditemukan
+export dbdMultiple(Config cfg) =>
+    int nFound = 0
+    int errCount = 0
+    string errCodes = ''
+
+    bool dropOut = not cfg.reqDrop or isDrop(open[1], close[1])
+
+    if dropOut
+        bool okFvgOut = fvgOutDbd(low[2], high[0])
+
+        for n = cfg.minBase to cfg.maxBase by 1
+            int k = n + 2
+
+            bool okLegOut = legOutValidDbd(cfg, open[1], high[1], low[1], close[1], open[k], close[k])
+            bool okLegIn = legInValidDbd(cfg, open[k], high[k], low[k], close[k])
+            bool dropIn = not cfg.reqDrop or isDrop(open[k], close[k])
+
+            if okLegOut and okLegIn and dropIn and baseMultipleOk(cfg, n) and baseBodyOk(cfg, n) and (cfg.devMode or jarakBaseOk(n, 0.5))
+                bool okFvgIn = fvgInDbd(low[k + 1], high[n + 1])
+                bool jarakInOk = jarakBaseLegInOk(n, 0.5)
+                bool jarakOutOk = jarakBaseLegOutOk(n, 0.5)
+                bool tanpaFvg = not okFvgIn and not okFvgOut
+
+                if not tanpaFvg or cfg.sensitivity == 'LOW'
+                    nFound := n
+
+                    if not okFvgOut
+                        errCount := errCount + 1
+                        errCodes := errCodes + '2 '
+                        errCodes
+                    if not jarakInOk
+                        errCount := errCount + 1
+                        errCodes := errCodes + '4 '
+                        errCodes
+                    if not jarakOutOk
+                        errCount := errCount + 1
+                        errCodes := errCodes + '11 '
+                        errCodes
+                    if not bodyAvgOk(cfg, open[k], close[k], k)
+                        errCount := errCount + 1
+                        errCodes := errCodes + '5 '
+                        errCodes
+                    if not bodyAvgOk(cfg, open[1], close[1], 1)
+                        errCount := errCount + 1
+                        errCodes := errCodes + '6 '
+                        errCodes
+                    if not legInBodyOk(open[k], high[k], low[k], close[k])
+                        errCount := errCount + 1
+                        errCodes := errCodes + '7 '
+                        errCodes
+                    if not legOutBodyOk(open[1], high[1], low[1], close[1])
+                        errCount := errCount + 1
+                        errCodes := errCodes + '8 '
+                        errCodes
+                    if not baseAtasOk(n)
+                        errCount := errCount + 1
+                        errCodes := errCodes + '9 '
+                        errCodes
+                    if not baseBawahOk(n)
+                        errCount := errCount + 1
+                        errCodes := errCodes + '10 '
+                        errCodes
+                    break
+
+    [nFound, errCount, str.trim(errCodes)]
+
+export rbrMultiple(Config cfg) =>
+    int nFound = 0
+    int errCount = 0
+    string errCodes = ''
+
+    bool rallyOut = not cfg.reqDrop or isBullish(open[1], close[1])
+
+    if rallyOut
+        bool okFvgOut = fvgOutRbr(high[2], low[0])
+
+        for n = cfg.minBase to cfg.maxBase by 1
+            int k = n + 2
+
+            bool okLegOut = legOutValidRbr(cfg, open[1], high[1], low[1], close[1], open[k], close[k])
+            bool okLegIn = legInValidRbr(cfg, open[k], high[k], low[k], close[k])
+            bool rallyIn = not cfg.reqDrop or isBullish(open[k], close[k])
+
+            if okLegOut and okLegIn and rallyIn and baseMultipleOk(cfg, n) and baseBodyOk(cfg, n) and (cfg.devMode or jarakBaseOk(n, 0.5))
+                bool okFvgIn = fvgInRbr(high[k + 1], low[n + 1])
+                bool jarakInOk = jarakBaseLegInOk(n, 0.5)
+                bool jarakOutOk = jarakBaseLegOutOk(n, 0.5)
+                bool tanpaFvg = not okFvgIn and not okFvgOut
+
+                if not tanpaFvg or cfg.sensitivity == 'LOW'
+                    nFound := n
+
+                    if not okFvgOut
+                        errCount := errCount + 1
+                        errCodes := errCodes + '2 '
+                        errCodes
+                    if not jarakInOk
+                        errCount := errCount + 1
+                        errCodes := errCodes + '4 '
+                        errCodes
+                    if not jarakOutOk
+                        errCount := errCount + 1
+                        errCodes := errCodes + '11 '
+                        errCodes
+                    if not bodyAvgOk(cfg, open[k], close[k], k)
+                        errCount := errCount + 1
+                        errCodes := errCodes + '5 '
+                        errCodes
+                    if not bodyAvgOk(cfg, open[1], close[1], 1)
+                        errCount := errCount + 1
+                        errCodes := errCodes + '6 '
+                        errCodes
+                    if not legInBodyOk(open[k], high[k], low[k], close[k])
+                        errCount := errCount + 1
+                        errCodes := errCodes + '7 '
+                        errCodes
+                    if not legOutBodyOk(open[1], high[1], low[1], close[1])
+                        errCount := errCount + 1
+                        errCodes := errCodes + '8 '
+                        errCodes
+                    if not baseBawahRbrOk(n)
+                        errCount := errCount + 1
+                        errCodes := errCodes + '9 '
+                        errCodes
+                    if not baseAtasRbrOk(n)
+                        errCount := errCount + 1
+                        errCodes := errCodes + '10 '
+                        errCodes
+                    break
+
+    [nFound, errCount, str.trim(errCodes)]
+
+// =====================================================================
+//  UPDATE  --  PANGGIL DI SETIAP BAR
+//  Mendeteksi pola, menyimpan zona, menandai zona yang sudah mati.
+//  Return: [adaZonaDbdBaru, adaZonaRbrBaru]  (berguna untuk alert)
+// =====================================================================
+export update(Store s) =>
+    Config cfg = s.cfg
+    int minG = gradeIdx(cfg.minGrade)
+
+    // ---- simpan data candle per bar ----
+    while s.topA.size() <= bar_index
+        s.topA.push(0.0)
+        s.botA.push(0.0)
+        s.hiA.push(0.0)
+        s.loA.push(0.0)
+        s.shA.push(0.0)
+        s.slA.push(0.0)
+        s.clsA.push(0.0)
+        s.timeA.push(0)
+        s.patFlag.push(0)
+        s.baseFlag.push(0)
+        s.baseZone.push(-1)
+        s.rbrPat.push(0)
+        s.rbrBaseFlag.push(0)
+        s.rbrBaseZone.push(-1)
+
+    s.topA.set(bar_index, math.max(open, close))
+    s.botA.set(bar_index, math.min(open, close))
+    s.hiA.set(bar_index, high)
+    s.loA.set(bar_index, low)
+    s.shA.set(bar_index, cfg.swingBasis == 'Body' ? math.max(open, close) : high)
+    s.slA.set(bar_index, cfg.swingBasis == 'Body' ? math.min(open, close) : low)
+    s.clsA.set(bar_index, close)
+    s.timeA.set(bar_index, time)
+
+    // ---- deteksi pola (dievaluasi di setiap bar) ----
+    [vDS, eDS, cDS] = dbdSingle(cfg)
+    vDS := vDS and eDS <= minG
+
+    [vRS, eRS, cRS] = rbrSingle(cfg)
+    vRS := vRS and eRS <= minG
+
+    [nDM, eDM, cDM] = dbdMultiple(cfg)
+    if eDM > minG
+        nDM := 0
+        nDM
+
+    [nRM, eRM, cRM] = rbrMultiple(cfg)
+    if eRM > minG
+        nRM := 0
+        nRM
+
+    bool newDbd = false
+    bool newRbr = false
+
+    if barstate.isconfirmed and bar_index >= 10
+        // ---- DBD Single ----
+        if vDS
+            s.dbd.push(Zone.new(left = bar_index - 3, right = bar_index - 1, top = high[2], bot = low[2], start = bar_index, lblX = bar_index - 2, txt = gradeText(eDS), tip = gradeTip(false, eDS, cDS), isSingle = true, baseL = bar_index - 2, baseR = bar_index - 2, err = eDS))
+            int zi = s.dbd.size() - 1
+            s.dbdActive.push(zi)
+            s.baseZone.set(bar_index - 2, zi)
+            s.baseFlag.set(bar_index - 2, 1)
+            for d = 1 to 3 by 1
+                s.patFlag.set(bar_index - d, 1)
+            newDbd := true
+            newDbd
+
+        // ---- DBD Multiple ----
+        if nDM != 0
+            s.dbd.push(Zone.new(left = bar_index - (nDM + 1), right = bar_index - 2, top = baseTop(nDM), bot = baseBottom(nDM), start = bar_index, lblX = bar_index - 2, txt = gradeText(eDM), tip = gradeTip(false, eDM, cDM), isSingle = false, baseL = bar_index - (nDM + 1), baseR = bar_index - 2, err = eDM))
+            int zi = s.dbd.size() - 1
+            s.dbdActive.push(zi)
+            for d = 2 to nDM + 1 by 1
+                s.baseZone.set(bar_index - d, zi)
+                s.baseFlag.set(bar_index - d, 1)
+            for d = 1 to nDM + 2 by 1
+                s.patFlag.set(bar_index - d, 1)
+            newDbd := true
+            newDbd
+
+        // ---- RBR Single ----
+        if vRS
+            s.rbr.push(Zone.new(left = bar_index - 3, right = bar_index - 1, top = high[2], bot = low[2], start = bar_index, lblX = bar_index - 2, txt = gradeText(eRS), tip = gradeTip(true, eRS, cRS), isSingle = true, baseL = bar_index - 2, baseR = bar_index - 2, err = eRS))
+            int zi = s.rbr.size() - 1
+            s.rbrActive.push(zi)
+            s.rbrBaseZone.set(bar_index - 2, zi)
+            s.rbrBaseFlag.set(bar_index - 2, 1)
+            for d = 1 to 3 by 1
+                s.rbrPat.set(bar_index - d, 1)
+            newRbr := true
+            newRbr
+
+        // ---- RBR Multiple ----
+        if nRM != 0
+            s.rbr.push(Zone.new(left = bar_index - (nRM + 1), right = bar_index - 2, top = baseTop(nRM), bot = baseBottom(nRM), start = bar_index, lblX = bar_index - 2, txt = gradeText(eRM), tip = gradeTip(true, eRM, cRM), isSingle = false, baseL = bar_index - (nRM + 1), baseR = bar_index - 2, err = eRM))
+            int zi = s.rbr.size() - 1
+            s.rbrActive.push(zi)
+            for d = 2 to nRM + 1 by 1
+                s.rbrBaseZone.set(bar_index - d, zi)
+                s.rbrBaseFlag.set(bar_index - d, 1)
+            for d = 1 to nRM + 2 by 1
+                s.rbrPat.set(bar_index - d, 1)
+            newRbr := true
+            newRbr
+
+        // ---- tandai zona yang sudah tertabrak body bar ini ----
+        float curTop = math.max(open, close)
+        float curBot = math.min(open, close)
+
+        if s.dbdActive.size() > 0
+            for a = s.dbdActive.size() - 1 to 0 by 1
+                Zone zz = s.dbd.get(s.dbdActive.get(a))
+                if zz.top <= curTop // ekor atas base tertabrak
+                    zz.dead := true
+                    s.dbdActive.remove(a)
+
+        if s.rbrActive.size() > 0
+            for a = s.rbrActive.size() - 1 to 0 by 1
+                Zone zz = s.rbr.get(s.rbrActive.get(a))
+                if zz.bot >= curBot // ekor bawah base tertabrak
+                    zz.dead := true
+                    s.rbrActive.remove(a)
+
+    [newDbd, newRbr]
+
+// =====================================================================
+//  OVERLAP
+// =====================================================================
+overlapBeats(int j, Zone zj, int z, Zone zz) =>
+    zj.err < zz.err or zj.err == zz.err and (zj.isSingle and not zz.isSingle or zj.isSingle == zz.isSingle and j < z)
+
+overlapSupp(Config cfg, array<Zone> zs, array<int> bz) =>
+    bool backtest = not cfg.devMode
+    int n = zs.size()
+
+    if n > 0
+        for z = 0 to n - 1 by 1
+            Zone z0 = zs.get(z)
+            z0.supp := false
+            z0.supp
+
+    if not cfg.disableOverlap and n > 1
+        for z = 0 to n - 1 by 1
+            Zone zz = zs.get(z)
+            bool kalah = false
+
+            // ke belakang (zona lebih lama)
+            int j = z - 1
+            while j >= 0
+                Zone zj = zs.get(j)
+                if zj.baseR < zz.baseL
+                    break
+                if not backtest or not zj.dead
+                    if overlapBeats(j, zj, z, zz)
+                        kalah := true
+                        break
+                j := j - 1
+                j
+
+            // ke depan (zona lebih baru)
+            if not kalah
+                j := z + 1
+                while j < n
+                    Zone zk = zs.get(j)
+                    if zk.baseR - (cfg.maxBase - 1) > zz.baseR
+                        break
+                    if zk.baseL <= zz.baseR and (not backtest or not zk.dead)
+                        if overlapBeats(j, zk, z, zz)
+                            kalah := true
+                            break
+                    j := j + 1
+                    j
+
+            zz.supp := kalah
+            zz.supp
+
+        // bangun ulang pemetaan candle base -> zona (hanya pemenang)
+        for z = 0 to n - 1 by 1
+            Zone zz = zs.get(z)
+            int cFrom = math.max(zz.baseL, 0)
+            int cTo = math.min(zz.baseR, bz.size() - 1)
+            if cFrom <= cTo
+                for c = cFrom to cTo by 1
+                    bz.set(c, -1)
+        for z = 0 to n - 1 by 1
+            Zone zz = zs.get(z)
+            if not zz.supp
+                int cFrom = math.max(zz.baseL, 0)
+                int cTo = math.min(zz.baseR, bz.size() - 1)
+                if cFrom <= cTo
+                    for c = cFrom to cTo by 1
+                        bz.set(c, z)
+    0
+
+// Panggil sebelum menggambar zona / Garis Control (cukup di barstate.islast
+// atau saat data historis selesai dimuat)
+export resolveOverlap(Store s) =>
+    overlapSupp(s.cfg, s.dbd, s.baseZone)
+    overlapSupp(s.cfg, s.rbr, s.rbrBaseZone)
+    0
+
+// true = zona layak digambar (belum mati kecuali devMode, dan tidak kalah overlap)
+export zoneVisible(Store s, Zone z) =>
+    (not z.dead or s.cfg.devMode) and not z.supp
+
+// =====================================================================
+//  ZIGZAG SWING
+//  Return: [harga pivot, index bar pivot, tipe (1 = high, -1 = low)]
+//  Panggil hanya di barstate.islast (berat)
+// =====================================================================
+addPivot(array<float> p, array<int> ix, array<int> t, float price, int idx, int typ) =>
+    int n = t.size()
+    bool samaTipe = false
+    if n > 0
+        samaTipe := t.get(n - 1) == typ
+        samaTipe
+
+    if samaTipe
+        bool lebihEkstrem = typ == 1 ? price > p.get(n - 1) : price < p.get(n - 1)
+        if lebihEkstrem
+            p.set(n - 1, price)
+            ix.set(n - 1, idx)
+    else
+        p.push(price)
+        ix.push(idx)
+        t.push(typ)
+    0
+
+export swingPivots(Store s) =>
+    array<float> swP = array.new_float()
+    array<int> swIdx = array.new_int()
+    array<int> swT = array.new_int()
+
+    int pvL = s.cfg.swingLeft
+    int pvNeed = s.cfg.swingNeed
+
+    if bar_index >= pvL + pvNeed
+        for idx = pvL to bar_index - pvNeed by 1
+            float hh = s.shA.get(idx)
+            float ll = s.slA.get(idx)
+            bool isH = true
+            bool isL = true
+
+            // sisi kiri
+            for j = 1 to pvL by 1
+                if s.shA.get(idx - j) > hh
+                    isH := false
+                    isH
+                if s.slA.get(idx - j) < ll
+                    isL := false
+                    isL
+
+            // sisi kanan, swing low
+            if isL
+                int cntL = 0
+                for j = 1 to bar_index - idx by 1
+                    float lj = s.slA.get(idx + j)
+                    if lj < ll
+                        break
+                    if lj > ll
+                        cntL := cntL + 1
+                        if cntL >= pvNeed
+                            break
+                isL := cntL >= pvNeed
+                isL
+
+            // sisi kanan, swing high
+            if isH
+                int cntH = 0
+                for j = 1 to bar_index - idx by 1
+                    float hj = s.shA.get(idx + j)
+                    if hj > hh
+                        break
+                    if hj < hh
+                        cntH := cntH + 1
+                        if cntH >= pvNeed
+                            break
+                isH := cntH >= pvNeed
+                isH
+
+            if isL
+                addPivot(swP, swIdx, swT, ll, idx, -1)
+            if isH
+                addPivot(swP, swIdx, swT, hh, idx, 1)
+
+    [swP, swIdx, swT]
+
+// =====================================================================
+//  GARIS CONTROL
+//  isHigh = true  -> garis pink (DBD), puncak acuan swing high
+//  isHigh = false -> garis hijau (RBR), lembah acuan swing low
+// =====================================================================
+fmtT(Store s, int idx) =>
+    str.format_time(s.timeA.get(idx), 'dd/MM HH:mm', 'GMT+7')
+
+// true = candle i adalah base yang masih aktif
+baseAktif(Store s, int i, bool isHigh) =>
+    bool ok = false
+    array<int> bf = isHigh ? s.baseFlag : s.rbrBaseFlag
+    array<int> bz = isHigh ? s.baseZone : s.rbrBaseZone
+    array<Zone> zs = isHigh ? s.dbd : s.rbr
+    if i >= 0 and i < bf.size()
+        if bf.get(i) == 1
+            int zid = bz.get(i)
+            if s.cfg.devMode
+                ok := s.cfg.disableOverlap or zid >= 0
+                ok
+            else
+                if zid >= 0 and zid < zs.size()
+                    ok := not zs.get(zid).dead
+                    ok
+    ok
+
+// Ekor terjauh seluruh base pada pola yang sama
+// isHigh: ekor tertinggi (DBD) | else: ekor terendah (RBR)
+baseExtreme(Store s, int i, bool isHigh) =>
+    array<int> bf = isHigh ? s.baseFlag : s.rbrBaseFlag
+    array<int> bz = isHigh ? s.baseZone : s.rbrBaseZone
+    array<Zone> zs = isHigh ? s.dbd : s.rbr
+    float v = isHigh ? s.hiA.get(i) : s.loA.get(i)
+    int zid = bz.get(i)
+
+    if zid >= 0 and zid < zs.size()
+        v := isHigh ? zs.get(zid).top : zs.get(zid).bot
+        v
+    else
+        int j = i - 1
+        while j >= 0 and bf.get(j) == 1
+            v := isHigh ? math.max(v, s.hiA.get(j)) : math.min(v, s.loA.get(j))
+            j := j - 1
+            j
+        j := i + 1
+        while j < bf.size() and bf.get(j) == 1
+            v := isHigh ? math.max(v, s.hiA.get(j)) : math.min(v, s.loA.get(j))
+            j := j + 1
+            j
+    v
+
+export controlLine(Store s, bool isHigh, array<float> swP, array<int> swIdx, array<int> swT) =>
+    int want = isHigh ? 1 : -1
+    string tag = isHigh ? 'DBD' : 'RBR'
+    array<int> pat = isHigh ? s.patFlag : s.rbrPat
+    array<int> bflag = isHigh ? s.baseFlag : s.rbrBaseFlag
+
+    ControlLine r = ControlLine.new()
+    r.notes := array.new_string()
+
+    // swing high / low terakhir
+    int lastIdx = na
+    float lastPrice = na
+    if swP.size() > 0
+        for k = swP.size() - 1 to 0 by 1
+            if swT.get(k) == want
+                lastIdx := swIdx.get(k)
+                lastPrice := swP.get(k)
+                break
+
+    r.exists := not na(lastIdx)
+    r.swingIdx := lastIdx
+    r.price := lastPrice
+    r.refIdx := lastIdx
+
+    float price = lastPrice
+    bool valid = false
+    int hitIdx = na
+    int curRefIdx = lastIdx
+    float curRefPrice = lastPrice
+    bool stopFlag = false
+    bool viaLegIn = false
+    int legInIdx = na
+
+    if not na(lastIdx) and lastIdx > 0
+        int i = lastIdx - 1
+        while i >= 0
+            // harga garis ada di dalam range ekor candle i
+            bool inRange = price >= s.loA.get(i) and price <= s.hiA.get(i)
+
+            // harga garis jatuh di gap kosong antara candle i dan i+1
+            bool gap = false
+            if i + 1 <= bar_index
+                gap := price > s.hiA.get(i) and price < s.loA.get(i + 1) or price < s.loA.get(i) and price > s.hiA.get(i + 1)
+                gap
+
+            if inRange or gap
+                // leg in = bagian pola, bukan base, candle kanannya base
+                bool isLegIn = pat.get(i) == 1 and bflag.get(i) == 0 and i + 1 < bflag.size() and bflag.get(i + 1) == 1
+                bool kiriBase = i >= 1 and baseAktif(s, i - 1, isHigh)
+                // leg out = bagian pola, bukan base, candle kirinya base
+                bool isLegOut = pat.get(i) == 1 and bflag.get(i) == 0 and i >= 1 and bflag.get(i - 1) == 1
+
+                int baseHit = na
+                if isLegOut
+                    int jb = i - 1
+                    while jb >= 0 and bflag.get(jb) == 1
+                        if baseAktif(s, jb, isHigh) and price >= s.loA.get(jb) and price <= s.hiA.get(jb)
+                            baseHit := jb
+                            break
+                        jb := jb - 1
+                        jb
+
+                if inRange and baseAktif(s, i, isHigh)
+                    // skenario 1: kena base aktif
+                    price := baseExtreme(s, i, isHigh)
+                    valid := true
+                    hitIdx := i
+                    break
+                else if inRange and isLegIn and kiriBase
+                    // skenario 2: kena leg in, candle kirinya base aktif
+                    price := baseExtreme(s, i - 1, isHigh)
+                    valid := true
+                    hitIdx := i - 1
+                    viaLegIn := true
+                    legInIdx := i
+                    break
+                else if inRange and isLegOut and not na(baseHit)
+                    // skenario 3: kena leg out, garis juga menyentuh base
+                    price := baseExtreme(s, baseHit, isHigh)
+                    valid := true
+                    hitIdx := baseHit
+                    break
+                else // kena gap kosong dianggap body. Kalau cuma kena ekor, telusuri ke kiri
+                    bool kenaBody = gap or price >= s.botA.get(i) and price <= s.topA.get(i)
+                    if not kenaBody
+                        i := i - 1
+                        continue
+
+                    string alasan = ''
+                    if gap and not inRange
+                        alasan := 'kena gap kosong (dianggap body)'
+                        alasan
+                    else if bflag.get(i) == 1
+                        alasan := 'kena base ' + tag + ' yang sudah mati'
+                        alasan
+                    else if isLegIn
+                        alasan := 'kena leg in ' + tag + ', tapi candle kirinya bukan base aktif'
+                        alasan
+                    else if pat.get(i) == 1
+                        alasan := 'kena leg out ' + tag + ', bukan base'
+                        alasan
+                    else
+                        alasan := 'kena candle biasa, bukan base'
+                        alasan
+
+                    string wktHit = fmtT(s, i)
+                    string wktRef = fmtT(s, curRefIdx)
+
+                    // pivot terdekat di kiri acuan saat ini yang LEBIH TINGGI (high) / LEBIH RENDAH (low)
+                    int nextIdx = na
+                    float nextPrice = na
+                    if swP.size() > 0
+                        for k = swP.size() - 1 to 0 by 1
+                            bool lebih = isHigh ? swP.get(k) > price : swP.get(k) < price
+                            if swT.get(k) == want and swIdx.get(k) < curRefIdx and lebih
+                                nextIdx := swIdx.get(k)
+                                nextPrice := swP.get(k)
+                                break
+
+                    if na(nextIdx)
+                        r.notes.push(wktRef + ' @ ' + str.tostring(curRefPrice, format.mintick) + ' -> SKIP: ' + alasan + ' (' + wktHit + '), tidak ada acuan ' + (isHigh ? 'lebih tinggi' : 'lebih rendah') + ', berhenti')
+                        stopFlag := true
+                        break
+
+                    r.notes.push(wktRef + ' @ ' + str.tostring(curRefPrice, format.mintick) + ' -> SKIP: ' + alasan + ' (' + wktHit + ')')
+
+                    curRefIdx := nextIdx
+                    curRefPrice := nextPrice
+                    price := nextPrice
+                    i := nextIdx - 1
+                    continue
+            i := i - 1
+            i
+
+        // catat acuan terakhir yang dipakai
+        string wktAkhir = fmtT(s, curRefIdx)
+        if valid
+            if viaLegIn
+                r.notes.push(wktAkhir + ' @ ' + str.tostring(curRefPrice, format.mintick) + ' -> DIPAKAI: kena leg in ' + tag + ' (' + fmtT(s, legInIdx) + '), base di kirinya (' + fmtT(s, hitIdx) + ')')
+            else
+                r.notes.push(wktAkhir + ' @ ' + str.tostring(curRefPrice, format.mintick) + ' -> DIPAKAI: kena base ' + tag + ' (' + fmtT(s, hitIdx) + ')')
+        else if not stopFlag
+            r.notes.push(wktAkhir + ' @ ' + str.tostring(curRefPrice, format.mintick) + ' -> tidak kena candle apa pun di kiri')
+
+    r.price := price
+    r.valid := valid
+    r.hitIdx := hitIdx
+    r.refIdx := curRefIdx
+    r.viaLegIn := viaLegIn
+    r.legInIdx := legInIdx
+    if r.exists
+        r.x1Time := valid and not na(hitIdx) ? s.timeA.get(hitIdx) : s.timeA.get(lastIdx)
+        r.x1Time
+    r
+
+// Teks label Garis Control (sama seperti indikator lama)
+export controlText(Store s, ControlLine cl, bool isHigh) =>
+    string tag = isHigh ? 'DBD' : 'RBR'
+    string judul = isHigh ? 'Garis Control - ' : 'Garis Control RBR - '
+    string acuan = isHigh ? 'Puncak acuan' : 'Lembah acuan'
+    string waktu = cl.valid and not na(cl.hitIdx) ? '\n' + tag + ': ' + fmtT(s, cl.hitIdx) : '\n' + tag + ': tidak ditemukan'
+    string t = judul + str.tostring(cl.price, format.mintick) + waktu
+    int nNote = cl.notes.size()
+    if nNote > 0
+        t := t + '\n' + acuan + ' (' + str.tostring(nNote) + '):'
+        for q = 0 to math.min(nNote, 8) - 1 by 1
+            t := t + '\n' + str.tostring(q + 1) + '. ' + cl.notes.get(q)
+            t
+        if nNote > 8
+            t := t + '\n+' + str.tostring(nNote - 8) + ' lainnya'
+            t
+    else
+        t := t + '\n' + acuan + ': tidak ada'
+        t
+    t
+
+// =====================================================================
+//  FIBONACCI 25% + TP
+//  Return: [batas bawah zona atas, batas atas zona bawah, harga TP]
+// =====================================================================
+export fibZones(float upper, float lower, float pct) =>
+    float rentang = upper - lower
+    [upper - rentang * pct, lower + rentang * pct, (upper + lower) / 2.0]
