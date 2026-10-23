@@ -1,5 +1,5 @@
 //@version=5
-indicator("7Seas_PAC (v1.8)", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=200)
+indicator("7Seas_PAC (v1.9)", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=200)
 
 // =====================================================================
 //  INPUT
@@ -42,10 +42,13 @@ showControlLine = input.bool(true, "Show Control Line", group="Swing Indicator")
 showLastSH      = showControlLine
 showLastSL      = showControlLine
 show618 = input.bool(false, "Show 61.8% Line", group="Swing Indicator")
+showBreakLine = input.bool(false, "Show Swing Break Line", group="Swing Indicator", tooltip="Garis putus-putus dari swing high/low sampai candle yang pertama kali mengalahkannya.")
 swingBasis = input.string("Wick", "Swing High/Low Source", options=["Body", "Wick"], group="Swing Indicator")
 swingAtrMult = 1.0
 showMinorLow  = true
 minorAtrMult  = 0.5
+
+breakLineCol  = input.color(color.rgb(41, 98, 255), "Swing Break Line Color", group="Swing Indicator")
 
 showDbdSingle   = true
 showRbrSingle = true
@@ -2018,6 +2021,38 @@ if barstate.islast
                      x2 = x, y2 = y,
                      xloc = xloc.bar_time,
                      color = zzLineCol, width = 1))
+
+                        // Garis putus-putus: dari swing sampai candle pertama yang mengalahkannya
+            if showBreakLine
+                int brk  = -1
+                int sIdx = swIdx.get(k)
+                if sIdx < bar_index
+                    for j = sIdx + 1 to bar_index
+                        bool kalah = isHigh ? shArr.get(j) > y : slArr.get(j) < y
+                        if kalah
+                            brk := j
+                            break
+
+                if brk >= 0
+                    int xBrk = timeArr.get(brk)
+
+                    zzLines.push(line.new(
+                         x1 = x,    y1 = y,
+                         x2 = xBrk, y2 = y,
+                         xloc  = xloc.bar_time,
+                         color = breakLineCol,
+                         style = line.style_dashed,
+                         width = 1))
+
+                    // lingkaran di titik swing dan di titik terkalahkan
+                    swingLabels.push(label.new(
+                         x = x, y = y, xloc = xloc.bar_time,
+                         text = "", style = label.style_circle,
+                         color = color.new(breakLineCol, 100), size = size.tiny))
+                    swingLabels.push(label.new(
+                         x = xBrk, y = y, xloc = xloc.bar_time,
+                         text = "", style = label.style_circle,
+                         color = color.new(breakLineCol, 100), size = size.tiny))
 
             // Garis 61.8%: hanya untuk leg turun (gunung kiri -> lembah kanan)
             if show618 and k > 0
