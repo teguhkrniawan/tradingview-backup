@@ -1003,7 +1003,7 @@ baseExtreme(Store s, int i, bool isHigh) =>
             j
     v
 
-export controlLine(Store s, bool isHigh, array<float> swP, array<int> swIdx, array<int> swT) =>
+controlLineCore(Store s, bool isHigh, array<float> swP, array<int> swIdx, array<int> swT, float manualPrice) =>
     int want = isHigh ? 1 : -1
     string tag = isHigh ? 'DBD' : 'RBR'
     array<int> pat = isHigh ? s.patFlag : s.rbrPat
@@ -1027,11 +1027,11 @@ export controlLine(Store s, bool isHigh, array<float> swP, array<int> swIdx, arr
     r.price := lastPrice
     r.refIdx := lastIdx
 
-    float price = lastPrice
+    float price = na(manualPrice) ? lastPrice : manualPrice
     bool valid = false
     int hitIdx = na
     int curRefIdx = lastIdx
-    float curRefPrice = lastPrice
+    float curRefPrice = price
     bool stopFlag = false
     bool viaLegIn = false
     int legInIdx = na
@@ -1159,6 +1159,15 @@ export controlLine(Store s, bool isHigh, array<float> swP, array<int> swIdx, arr
     r
 
 // Teks label Garis Control (sama seperti indikator lama)
+// Mode otomatis (sama seperti sebelumnya)
+export controlLine(Store s, bool isHigh, array<float> swP, array<int> swIdx, array<int> swT) =>
+    controlLineCore(s, isHigh, swP, swIdx, swT, na)
+
+// Mode manual: pindai ke kiri mulai dari harga manual
+export controlLineAt(Store s, bool isHigh, array<float> swP, array<int> swIdx, array<int> swT, float manualPrice) =>
+    controlLineCore(s, isHigh, swP, swIdx, swT, manualPrice)
+
+
 export controlText(Store s, ControlLine cl, bool isHigh) =>
     string tag = isHigh ? 'DBD' : 'RBR'
     string judul = isHigh ? 'Garis Control - ' : 'Garis Control RBR - '
