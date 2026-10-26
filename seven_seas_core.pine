@@ -34,6 +34,7 @@ export type Config
 	string swingBasis = 'Wick' // "Wick" | "Body"
 	int swingLeft = 2
 	int swingNeed = 2
+    string tag = ''
 
 // Satu zona (DBD atau RBR)
 export type Zone
@@ -90,6 +91,9 @@ export type ControlLine
 // Buat Store baru. Pakai:  var store = core.newStore(cfg)
 export newStore(Config cfg) =>
     Store.new(cfg = cfg, topA = array.new_float(), botA = array.new_float(), hiA = array.new_float(), loA = array.new_float(), shA = array.new_float(), slA = array.new_float(), clsA = array.new_float(), timeA = array.new_int(), patFlag = array.new_int(), baseFlag = array.new_int(), baseZone = array.new_int(), rbrPat = array.new_int(), rbrBaseFlag = array.new_int(), rbrBaseZone = array.new_int(), dbd = array.new<Zone>(), rbr = array.new<Zone>(), dbdActive = array.new_int(), rbrActive = array.new_int())
+
+export shift(Config cfg) =>
+    cfg.tag == 'scalping' ? 1 : 0
 
 // =====================================================================
 //  FUNGSI CANDLE DASAR
@@ -166,105 +170,101 @@ wickOkBear(Config cfg, float o, float h, float l, float c, int offset) =>
     pip(body(o, c)) < pip(avgBody(cfg, offset)) or pip(totalWick(o, h, l, c)) >= pip(body(o, c)) or isDrop(o, c) and pip(body(o, c)) > pip(totalWick(o, h, l, c))
 
 baseMultipleOk(Config cfg, int nBase) =>
+    int d = shift(cfg)
     bool ok = true
-    for j = 2 to nBase + 1 by 1
+    for j = 2 - d to nBase + 1 - d by 1
         if not wickOkBull(cfg, open[j], high[j], low[j], close[j], j)
             ok := false
-            ok
     ok
 
-// Kode 9 (DBD): semua ekor atas base <= open leg in
-baseAtasOk(int nBase) =>
-    float openLegIn = open[nBase + 2]
+baseAtasOk(Config cfg, int nBase) =>
+    int d = shift(cfg)
+    float openLegIn = open[nBase + 2 - d]
     bool ok = true
-    for j = 2 to nBase + 1 by 1
+    for j = 2 - d to nBase + 1 - d by 1
         if high[j] > openLegIn
             ok := false
-            ok
     ok
 
-// Kode 10 (DBD): semua ekor bawah base >= low leg out
-baseBawahOk(int nBase) =>
-    float lowLegOut = low[1]
+baseBawahOk(Config cfg, int nBase) =>
+    int d = shift(cfg)
+    float lowLegOut = low[1 - d]
     bool ok = true
-    for j = 2 to nBase + 1 by 1
+    for j = 2 - d to nBase + 1 - d by 1
         if low[j] < lowLegOut
             ok := false
-            ok
     ok
 
-// Kode 9 (RBR): semua ekor bawah base >= low leg in
-baseBawahRbrOk(int nBase) =>
-    float lowLegIn = low[nBase + 2]
+baseBawahRbrOk(Config cfg, int nBase) =>
+    int d = shift(cfg)
+    float lowLegIn = low[nBase + 2 - d]
     bool ok = true
-    for j = 2 to nBase + 1 by 1
+    for j = 2 - d to nBase + 1 - d by 1
         if low[j] < lowLegIn
             ok := false
-            ok
     ok
 
-// Kode 10 (RBR): semua ekor atas base <= high leg out
-baseAtasRbrOk(int nBase) =>
-    float highLegOut = high[1]
+baseAtasRbrOk(Config cfg, int nBase) =>
+    int d = shift(cfg)
+    float highLegOut = high[1 - d]
     bool ok = true
-    for j = 2 to nBase + 1 by 1
+    for j = 2 - d to nBase + 1 - d by 1
         if high[j] > highLegOut
             ok := false
-            ok
     ok
 
-// Jarak base = puncak body tertinggi - dasar body terendah
-jarakBase(int nBase) =>
+jarakBase(Config cfg, int nBase) =>
+    int d = shift(cfg)
     float puncak = na
     float dasar = na
-    for j = 2 to nBase + 1 by 1
+    for j = 2 - d to nBase + 1 - d by 1
         float atasBody = math.max(open[j], close[j])
         float bawahBody = math.min(open[j], close[j])
         puncak := na(puncak) ? atasBody : math.max(puncak, atasBody)
         dasar := na(dasar) ? bawahBody : math.min(dasar, bawahBody)
-        dasar
     puncak - dasar
 
-jarakBaseOk(int nBase, float maxRasio) =>
-    float jarak = jarakBase(nBase)
-    float bodyLegIn = body(open[nBase + 2], close[nBase + 2])
-    float bodyLegOut = body(open[1], close[1])
+jarakBaseOk(Config cfg, int nBase, float maxRasio) =>
+    int d = shift(cfg)
+    float jarak = jarakBase(cfg, nBase)
+    float bodyLegIn = body(open[nBase + 2 - d], close[nBase + 2 - d])
+    float bodyLegOut = body(open[1 - d], close[1 - d])
     jarak <= bodyLegIn * maxRasio and jarak <= bodyLegOut * maxRasio
 
-// Kode 4
-jarakBaseLegInOk(int nBase, float maxRasio) =>
-    jarakBase(nBase) <= body(open[nBase + 2], close[nBase + 2]) * maxRasio
+jarakBaseLegInOk(Config cfg, int nBase, float maxRasio) =>
+    int d = shift(cfg)
+    jarakBase(cfg, nBase) <= body(open[nBase + 2 - d], close[nBase + 2 - d]) * maxRasio
 
-// Kode 11
-jarakBaseLegOutOk(int nBase, float maxRasio) =>
-    jarakBase(nBase) <= body(open[1], close[1]) * maxRasio
+jarakBaseLegOutOk(Config cfg, int nBase, float maxRasio) =>
+    int d = shift(cfg)
+    jarakBase(cfg, nBase) <= body(open[1 - d], close[1 - d]) * maxRasio
 
-// Body tiap base tidak boleh > body leg in / leg out
 baseBodyOk(Config cfg, int nBase) =>
+    int d = shift(cfg)
     bool ok = true
     if cfg.baseBodyCheck
-        float bodyLegIn = body(open[nBase + 2], close[nBase + 2])
-        float bodyLegOut = body(open[1], close[1])
-        for j = 2 to nBase + 1 by 1
+        float bodyLegIn = body(open[nBase + 2 - d], close[nBase + 2 - d])
+        float bodyLegOut = body(open[1 - d], close[1 - d])
+        for j = 2 - d to nBase + 1 - d by 1
             float bodyBase = body(open[j], close[j])
             if bodyBase > bodyLegIn or bodyBase > bodyLegOut
                 ok := false
-                ok
     ok
 
-export baseTop(int nBase) =>
-    float t = high[2]
-    for j = 3 to nBase + 1 by 1
+export baseTop(Config cfg, int nBase) =>
+    int d = shift(cfg)
+    float t = high[2 - d]
+    for j = 3 - d to nBase + 1 - d by 1
         t := math.max(t, high[j])
-        t
     t
 
-export baseBottom(int nBase) =>
-    float b = low[2]
-    for j = 3 to nBase + 1 by 1
+export baseBottom(Config cfg, int nBase) =>
+    int d = shift(cfg)
+    float b = low[2 - d]
+    for j = 3 - d to nBase + 1 - d by 1
         b := math.min(b, low[j])
-        b
     b
+
 
 // =====================================================================
 //  FVG
@@ -388,32 +388,33 @@ export tipKena(string tip, bool kena, string pesan) =>
 //   C1 = [3] leg in, C2 = [2] base, C3 = [1] leg out
 // =====================================================================
 export dbdSingle(Config cfg) =>
-    float o1 = open[3]
-    float h1 = high[3]
-    float l1 = low[3]
-    float c1 = close[3]
-    float o2 = open[2]
-    float h2 = high[2]
-    float l2 = low[2]
-    float c2 = close[2]
-    float o3 = open[1]
-    float h3 = high[1]
-    float l3 = low[1]
-    float c3 = close[1]
+    int d = shift(cfg)
+    float o1 = open[3 - d]
+    float h1 = high[3 - d]
+    float l1 = low[3 - d]
+    float c1 = close[3 - d]
+    float o2 = open[2 - d]
+    float h2 = high[2 - d]
+    float l2 = low[2 - d]
+    float c2 = close[2 - d]
+    float o3 = open[1 - d]
+    float h3 = high[1 - d]
+    float l3 = low[1 - d]
+    float c3 = close[1 - d]
 
     bool okLegIn = legInValidDbd(cfg, o1, h1, l1, c1)
-    bool okCandle2 = wickOkBull(cfg, o2, h2, l2, c2, 2)
+    bool okCandle2 = wickOkBull(cfg, o2, h2, l2, c2, 2 - d)
     bool okLegOut = legOutValidDbd(cfg, o3, h3, l3, c3, o1, c1)
-    bool okFvgIn = fvgInDbd(low[4], high[2])
-    bool okFvgOut = fvgOutDbd(low[2], high[0])
+    bool okFvgIn = fvgInDbd(low[4 - d], high[2 - d])
+    bool okFvgOut = d == 1 ? true : fvgOutDbd(low[2], high[0])
     bool dropOK = not cfg.reqDrop or isDrop(o1, c1) and isDrop(o3, c3)
 
-    bool jarakOk = jarakBaseOk(1, 0.5)
-    bool jarakInOk = jarakBaseLegInOk(1, 0.5)
-    bool jarakOutOk = jarakBaseLegOutOk(1, 0.5)
+    bool jarakOk = jarakBaseOk(cfg, 1, 0.5)
+    bool jarakInOk = jarakBaseLegInOk(cfg, 1, 0.5)
+    bool jarakOutOk = jarakBaseLegOutOk(cfg, 1, 0.5)
 
     bool polaOk = okLegIn and okLegOut and okCandle2 and dropOK and baseBodyOk(cfg, 1) and (cfg.devMode or jarakOk)
-    bool tanpaFvg = not okFvgIn and not okFvgOut
+    bool tanpaFvg = d == 1 ? not okFvgIn : (not okFvgIn and not okFvgOut)
     bool valid = polaOk and (not tanpaFvg or cfg.sensitivity == 'LOW')
 
     int errCount = 0
@@ -423,69 +424,61 @@ export dbdSingle(Config cfg) =>
         if not okFvgOut
             errCount := errCount + 1
             errCodes := errCodes + '2 '
-            errCodes
         if not jarakInOk
             errCount := errCount + 1
             errCodes := errCodes + '4 '
-            errCodes
         if not jarakOutOk
             errCount := errCount + 1
             errCodes := errCodes + '11 '
-            errCodes
-        if not bodyAvgOk(cfg, o1, c1, 3)
+        if not bodyAvgOk(cfg, o1, c1, 3 - d)
             errCount := errCount + 1
             errCodes := errCodes + '5 '
-            errCodes
-        if not bodyAvgOk(cfg, o3, c3, 1)
+        if not bodyAvgOk(cfg, o3, c3, 1 - d)
             errCount := errCount + 1
             errCodes := errCodes + '6 '
-            errCodes
         if not legInBodyOk(o1, h1, l1, c1)
             errCount := errCount + 1
             errCodes := errCodes + '7 '
-            errCodes
         if not legOutBodyOk(o3, h3, l3, c3)
             errCount := errCount + 1
             errCodes := errCodes + '8 '
-            errCodes
         if h2 > o1
             errCount := errCount + 1
             errCodes := errCodes + '9 '
-            errCodes
         if l2 < c3
             errCount := errCount + 1
             errCodes := errCodes + '10 '
-            errCodes
 
     [valid, errCount, str.trim(errCodes)]
 
 export rbrSingle(Config cfg) =>
-    float o1 = open[3]
-    float h1 = high[3]
-    float l1 = low[3]
-    float c1 = close[3]
-    float o2 = open[2]
-    float h2 = high[2]
-    float l2 = low[2]
-    float c2 = close[2]
-    float o3 = open[1]
-    float h3 = high[1]
-    float l3 = low[1]
-    float c3 = close[1]
+    int d = shift(cfg)
+    float o1 = open[3 - d]
+    float h1 = high[3 - d]
+    float l1 = low[3 - d]
+    float c1 = close[3 - d]
+    float o2 = open[2 - d]
+    float h2 = high[2 - d]
+    float l2 = low[2 - d]
+    float c2 = close[2 - d]
+    float o3 = open[1 - d]
+    float h3 = high[1 - d]
+    float l3 = low[1 - d]
+    float c3 = close[1 - d]
 
     bool okLegIn = legInValidRbr(cfg, o1, h1, l1, c1)
-    bool okCandle2 = wickOkBear(cfg, o2, h2, l2, c2, 2)
+    bool okCandle2 = wickOkBear(cfg, o2, h2, l2, c2, 2 - d)
     bool okLegOut = legOutValidRbr(cfg, o3, h3, l3, c3, o1, c1)
-    bool okFvgIn = fvgInRbr(high[4], low[2])
-    bool okFvgOut = fvgOutRbr(high[2], low[0])
+    bool okFvgIn = fvgInRbr(high[4 - d], low[2 - d])
+    bool okFvgOut = d == 1 ? true : fvgOutRbr(high[2], low[0])
     bool rallyOK = not cfg.reqDrop or isBullish(o1, c1) and isBullish(o3, c3)
 
-    bool jarakOk = jarakBaseOk(1, 0.5)
-    bool jarakInOk = jarakBaseLegInOk(1, 0.5)
-    bool jarakOutOk = jarakBaseLegOutOk(1, 0.5)
+    bool jarakOk = jarakBaseOk(cfg, 1, 0.5)
+    bool jarakInOk = jarakBaseLegInOk(cfg, 1, 0.5)
+    bool jarakOutOk = jarakBaseLegOutOk(cfg, 1, 0.5)
 
     bool polaOk = okLegIn and okLegOut and okCandle2 and rallyOK and baseBodyOk(cfg, 1) and (cfg.devMode or jarakOk)
-    bool tanpaFvg = not okFvgIn and not okFvgOut
+    bool tanpaFvg = d == 1 ? not okFvgIn : (not okFvgIn and not okFvgOut)
     bool valid = polaOk and (not tanpaFvg or cfg.sensitivity == 'LOW')
 
     int errCount = 0
@@ -495,65 +488,57 @@ export rbrSingle(Config cfg) =>
         if not okFvgOut
             errCount := errCount + 1
             errCodes := errCodes + '2 '
-            errCodes
         if not jarakInOk
             errCount := errCount + 1
             errCodes := errCodes + '4 '
-            errCodes
         if not jarakOutOk
             errCount := errCount + 1
             errCodes := errCodes + '11 '
-            errCodes
-        if not bodyAvgOk(cfg, o1, c1, 3)
+        if not bodyAvgOk(cfg, o1, c1, 3 - d)
             errCount := errCount + 1
             errCodes := errCodes + '5 '
-            errCodes
-        if not bodyAvgOk(cfg, o3, c3, 1)
+        if not bodyAvgOk(cfg, o3, c3, 1 - d)
             errCount := errCount + 1
             errCodes := errCodes + '6 '
-            errCodes
         if not legInBodyOk(o1, h1, l1, c1)
             errCount := errCount + 1
             errCodes := errCodes + '7 '
-            errCodes
         if not legOutBodyOk(o3, h3, l3, c3)
             errCount := errCount + 1
             errCodes := errCodes + '8 '
-            errCodes
         if l2 < l1
             errCount := errCount + 1
             errCodes := errCodes + '9 '
-            errCodes
         if h2 > h3
             errCount := errCount + 1
             errCodes := errCodes + '10 '
-            errCodes
 
     [valid, errCount, str.trim(errCodes)]
 
 // n base = 0 berarti pola tidak ditemukan
 export dbdMultiple(Config cfg) =>
+    int d = shift(cfg)
     int nFound = 0
     int errCount = 0
     string errCodes = ''
 
-    bool dropOut = not cfg.reqDrop or isDrop(open[1], close[1])
+    bool dropOut = not cfg.reqDrop or isDrop(open[1 - d], close[1 - d])
 
     if dropOut
-        bool okFvgOut = fvgOutDbd(low[2], high[0])
+        bool okFvgOut = d == 1 ? true : fvgOutDbd(low[2], high[0])
 
         for n = cfg.minBase to cfg.maxBase by 1
-            int k = n + 2
+            int k = n + 2 - d
 
-            bool okLegOut = legOutValidDbd(cfg, open[1], high[1], low[1], close[1], open[k], close[k])
+            bool okLegOut = legOutValidDbd(cfg, open[1 - d], high[1 - d], low[1 - d], close[1 - d], open[k], close[k])
             bool okLegIn = legInValidDbd(cfg, open[k], high[k], low[k], close[k])
             bool dropIn = not cfg.reqDrop or isDrop(open[k], close[k])
 
-            if okLegOut and okLegIn and dropIn and baseMultipleOk(cfg, n) and baseBodyOk(cfg, n) and (cfg.devMode or jarakBaseOk(n, 0.5))
-                bool okFvgIn = fvgInDbd(low[k + 1], high[n + 1])
-                bool jarakInOk = jarakBaseLegInOk(n, 0.5)
-                bool jarakOutOk = jarakBaseLegOutOk(n, 0.5)
-                bool tanpaFvg = not okFvgIn and not okFvgOut
+            if okLegOut and okLegIn and dropIn and baseMultipleOk(cfg, n) and baseBodyOk(cfg, n) and (cfg.devMode or jarakBaseOk(cfg, n, 0.5))
+                bool okFvgIn = fvgInDbd(low[k + 1], high[n + 1 - d])
+                bool jarakInOk = jarakBaseLegInOk(cfg, n, 0.5)
+                bool jarakOutOk = jarakBaseLegOutOk(cfg, n, 0.5)
+                bool tanpaFvg = d == 1 ? not okFvgIn : (not okFvgIn and not okFvgOut)
 
                 if not tanpaFvg or cfg.sensitivity == 'LOW'
                     nFound := n
@@ -561,65 +546,57 @@ export dbdMultiple(Config cfg) =>
                     if not okFvgOut
                         errCount := errCount + 1
                         errCodes := errCodes + '2 '
-                        errCodes
                     if not jarakInOk
                         errCount := errCount + 1
                         errCodes := errCodes + '4 '
-                        errCodes
                     if not jarakOutOk
                         errCount := errCount + 1
                         errCodes := errCodes + '11 '
-                        errCodes
                     if not bodyAvgOk(cfg, open[k], close[k], k)
                         errCount := errCount + 1
                         errCodes := errCodes + '5 '
-                        errCodes
-                    if not bodyAvgOk(cfg, open[1], close[1], 1)
+                    if not bodyAvgOk(cfg, open[1 - d], close[1 - d], 1 - d)
                         errCount := errCount + 1
                         errCodes := errCodes + '6 '
-                        errCodes
                     if not legInBodyOk(open[k], high[k], low[k], close[k])
                         errCount := errCount + 1
                         errCodes := errCodes + '7 '
-                        errCodes
-                    if not legOutBodyOk(open[1], high[1], low[1], close[1])
+                    if not legOutBodyOk(open[1 - d], high[1 - d], low[1 - d], close[1 - d])
                         errCount := errCount + 1
                         errCodes := errCodes + '8 '
-                        errCodes
-                    if not baseAtasOk(n)
+                    if not baseAtasOk(cfg, n)
                         errCount := errCount + 1
                         errCodes := errCodes + '9 '
-                        errCodes
-                    if not baseBawahOk(n)
+                    if not baseBawahOk(cfg, n)
                         errCount := errCount + 1
                         errCodes := errCodes + '10 '
-                        errCodes
                     break
 
     [nFound, errCount, str.trim(errCodes)]
 
 export rbrMultiple(Config cfg) =>
+    int d = shift(cfg)
     int nFound = 0
     int errCount = 0
     string errCodes = ''
 
-    bool rallyOut = not cfg.reqDrop or isBullish(open[1], close[1])
+    bool rallyOut = not cfg.reqDrop or isBullish(open[1 - d], close[1 - d])
 
     if rallyOut
-        bool okFvgOut = fvgOutRbr(high[2], low[0])
+        bool okFvgOut = d == 1 ? true : fvgOutRbr(high[2], low[0])
 
         for n = cfg.minBase to cfg.maxBase by 1
-            int k = n + 2
+            int k = n + 2 - d
 
-            bool okLegOut = legOutValidRbr(cfg, open[1], high[1], low[1], close[1], open[k], close[k])
+            bool okLegOut = legOutValidRbr(cfg, open[1 - d], high[1 - d], low[1 - d], close[1 - d], open[k], close[k])
             bool okLegIn = legInValidRbr(cfg, open[k], high[k], low[k], close[k])
             bool rallyIn = not cfg.reqDrop or isBullish(open[k], close[k])
 
-            if okLegOut and okLegIn and rallyIn and baseMultipleOk(cfg, n) and baseBodyOk(cfg, n) and (cfg.devMode or jarakBaseOk(n, 0.5))
-                bool okFvgIn = fvgInRbr(high[k + 1], low[n + 1])
-                bool jarakInOk = jarakBaseLegInOk(n, 0.5)
-                bool jarakOutOk = jarakBaseLegOutOk(n, 0.5)
-                bool tanpaFvg = not okFvgIn and not okFvgOut
+            if okLegOut and okLegIn and rallyIn and baseMultipleOk(cfg, n) and baseBodyOk(cfg, n) and (cfg.devMode or jarakBaseOk(cfg, n, 0.5))
+                bool okFvgIn = fvgInRbr(high[k + 1], low[n + 1 - d])
+                bool jarakInOk = jarakBaseLegInOk(cfg, n, 0.5)
+                bool jarakOutOk = jarakBaseLegOutOk(cfg, n, 0.5)
+                bool tanpaFvg = d == 1 ? not okFvgIn : (not okFvgIn and not okFvgOut)
 
                 if not tanpaFvg or cfg.sensitivity == 'LOW'
                     nFound := n
@@ -627,39 +604,30 @@ export rbrMultiple(Config cfg) =>
                     if not okFvgOut
                         errCount := errCount + 1
                         errCodes := errCodes + '2 '
-                        errCodes
                     if not jarakInOk
                         errCount := errCount + 1
                         errCodes := errCodes + '4 '
-                        errCodes
                     if not jarakOutOk
                         errCount := errCount + 1
                         errCodes := errCodes + '11 '
-                        errCodes
                     if not bodyAvgOk(cfg, open[k], close[k], k)
                         errCount := errCount + 1
                         errCodes := errCodes + '5 '
-                        errCodes
-                    if not bodyAvgOk(cfg, open[1], close[1], 1)
+                    if not bodyAvgOk(cfg, open[1 - d], close[1 - d], 1 - d)
                         errCount := errCount + 1
                         errCodes := errCodes + '6 '
-                        errCodes
                     if not legInBodyOk(open[k], high[k], low[k], close[k])
                         errCount := errCount + 1
                         errCodes := errCodes + '7 '
-                        errCodes
-                    if not legOutBodyOk(open[1], high[1], low[1], close[1])
+                    if not legOutBodyOk(open[1 - d], high[1 - d], low[1 - d], close[1 - d])
                         errCount := errCount + 1
                         errCodes := errCodes + '8 '
-                        errCodes
-                    if not baseBawahRbrOk(n)
+                    if not baseBawahRbrOk(cfg, n)
                         errCount := errCount + 1
                         errCodes := errCodes + '9 '
-                        errCodes
-                    if not baseAtasRbrOk(n)
+                    if not baseAtasRbrOk(cfg, n)
                         errCount := errCount + 1
                         errCodes := errCodes + '10 '
-                        errCodes
                     break
 
     [nFound, errCount, str.trim(errCodes)]
@@ -672,6 +640,10 @@ export rbrMultiple(Config cfg) =>
 export update(Store s) =>
     Config cfg = s.cfg
     int minG = gradeIdx(cfg.minGrade)
+    int d = shift(cfg)
+
+    // scalping: zona boleh terbentuk saat candle leg out masih berjalan (intrabar)
+    bool allowNow = barstate.isconfirmed or cfg.tag == 'scalping'
 
     // ---- simpan data candle per bar ----
     while s.topA.size() <= bar_index
@@ -709,66 +681,61 @@ export update(Store s) =>
     [nDM, eDM, cDM] = dbdMultiple(cfg)
     if eDM > minG
         nDM := 0
-        nDM
 
     [nRM, eRM, cRM] = rbrMultiple(cfg)
     if eRM > minG
         nRM := 0
-        nRM
 
     bool newDbd = false
     bool newRbr = false
 
-    if barstate.isconfirmed and bar_index >= 10
+    // if barstate.isconfirmed and bar_index >= 10
+    if allowNow and bar_index >= 10
         // ---- DBD Single ----
         if vDS
-            s.dbd.push(Zone.new(left = bar_index - 3, right = bar_index - 1, top = high[2], bot = low[2], start = bar_index, lblX = bar_index - 2, txt = gradeText(eDS), tip = gradeTip(false, eDS, cDS), isSingle = true, baseL = bar_index - 2, baseR = bar_index - 2, err = eDS))
+            s.dbd.push(Zone.new(left = bar_index - 3 + d, right = bar_index - 1 + d, top = high[2 - d], bot = low[2 - d], start = bar_index, lblX = bar_index - 2 + d, txt = gradeText(eDS), tip = gradeTip(false, eDS, cDS), isSingle = true, baseL = bar_index - 2 + d, baseR = bar_index - 2 + d, err = eDS))
             int zi = s.dbd.size() - 1
             s.dbdActive.push(zi)
-            s.baseZone.set(bar_index - 2, zi)
-            s.baseFlag.set(bar_index - 2, 1)
-            for d = 1 to 3 by 1
-                s.patFlag.set(bar_index - d, 1)
+            s.baseZone.set(bar_index - 2 + d, zi)
+            s.baseFlag.set(bar_index - 2 + d, 1)
+            for p = 1 - d to 3 - d by 1
+                s.patFlag.set(bar_index - p, 1)
             newDbd := true
-            newDbd
 
         // ---- DBD Multiple ----
         if nDM != 0
-            s.dbd.push(Zone.new(left = bar_index - (nDM + 1), right = bar_index - 2, top = baseTop(nDM), bot = baseBottom(nDM), start = bar_index, lblX = bar_index - 2, txt = gradeText(eDM), tip = gradeTip(false, eDM, cDM), isSingle = false, baseL = bar_index - (nDM + 1), baseR = bar_index - 2, err = eDM))
+            s.dbd.push(Zone.new(left = bar_index - (nDM + 1) + d, right = bar_index - 2 + d, top = baseTop(cfg, nDM), bot = baseBottom(cfg, nDM), start = bar_index, lblX = bar_index - 2 + d, txt = gradeText(eDM), tip = gradeTip(false, eDM, cDM), isSingle = false, baseL = bar_index - (nDM + 1) + d, baseR = bar_index - 2 + d, err = eDM))
             int zi = s.dbd.size() - 1
             s.dbdActive.push(zi)
-            for d = 2 to nDM + 1 by 1
-                s.baseZone.set(bar_index - d, zi)
-                s.baseFlag.set(bar_index - d, 1)
-            for d = 1 to nDM + 2 by 1
-                s.patFlag.set(bar_index - d, 1)
+            for p = 2 - d to nDM + 1 - d by 1
+                s.baseZone.set(bar_index - p, zi)
+                s.baseFlag.set(bar_index - p, 1)
+            for p = 1 - d to nDM + 2 - d by 1
+                s.patFlag.set(bar_index - p, 1)
             newDbd := true
-            newDbd
 
         // ---- RBR Single ----
         if vRS
-            s.rbr.push(Zone.new(left = bar_index - 3, right = bar_index - 1, top = high[2], bot = low[2], start = bar_index, lblX = bar_index - 2, txt = gradeText(eRS), tip = gradeTip(true, eRS, cRS), isSingle = true, baseL = bar_index - 2, baseR = bar_index - 2, err = eRS))
+            s.rbr.push(Zone.new(left = bar_index - 3 + d, right = bar_index - 1 + d, top = high[2 - d], bot = low[2 - d], start = bar_index, lblX = bar_index - 2 + d, txt = gradeText(eRS), tip = gradeTip(true, eRS, cRS), isSingle = true, baseL = bar_index - 2 + d, baseR = bar_index - 2 + d, err = eRS))
             int zi = s.rbr.size() - 1
             s.rbrActive.push(zi)
-            s.rbrBaseZone.set(bar_index - 2, zi)
-            s.rbrBaseFlag.set(bar_index - 2, 1)
-            for d = 1 to 3 by 1
-                s.rbrPat.set(bar_index - d, 1)
+            s.rbrBaseZone.set(bar_index - 2 + d, zi)
+            s.rbrBaseFlag.set(bar_index - 2 + d, 1)
+            for p = 1 - d to 3 - d by 1
+                s.rbrPat.set(bar_index - p, 1)
             newRbr := true
-            newRbr
 
         // ---- RBR Multiple ----
         if nRM != 0
-            s.rbr.push(Zone.new(left = bar_index - (nRM + 1), right = bar_index - 2, top = baseTop(nRM), bot = baseBottom(nRM), start = bar_index, lblX = bar_index - 2, txt = gradeText(eRM), tip = gradeTip(true, eRM, cRM), isSingle = false, baseL = bar_index - (nRM + 1), baseR = bar_index - 2, err = eRM))
+            s.rbr.push(Zone.new(left = bar_index - (nRM + 1) + d, right = bar_index - 2 + d, top = baseTop(cfg, nRM), bot = baseBottom(cfg, nRM), start = bar_index, lblX = bar_index - 2 + d, txt = gradeText(eRM), tip = gradeTip(true, eRM, cRM), isSingle = false, baseL = bar_index - (nRM + 1) + d, baseR = bar_index - 2 + d, err = eRM))
             int zi = s.rbr.size() - 1
             s.rbrActive.push(zi)
-            for d = 2 to nRM + 1 by 1
-                s.rbrBaseZone.set(bar_index - d, zi)
-                s.rbrBaseFlag.set(bar_index - d, 1)
-            for d = 1 to nRM + 2 by 1
-                s.rbrPat.set(bar_index - d, 1)
+            for p = 2 - d to nRM + 1 - d by 1
+                s.rbrBaseZone.set(bar_index - p, zi)
+                s.rbrBaseFlag.set(bar_index - p, 1)
+            for p = 1 - d to nRM + 2 - d by 1
+                s.rbrPat.set(bar_index - p, 1)
             newRbr := true
-            newRbr
 
         // ---- tandai zona yang sudah tertabrak body bar ini ----
         float curTop = math.max(open, close)
@@ -777,19 +744,18 @@ export update(Store s) =>
         if s.dbdActive.size() > 0
             for a = s.dbdActive.size() - 1 to 0 by 1
                 Zone zz = s.dbd.get(s.dbdActive.get(a))
-                if zz.top <= curTop // ekor atas base tertabrak
+                if (d == 0 or zz.start < bar_index) and zz.top <= curTop
                     zz.dead := true
                     s.dbdActive.remove(a)
 
         if s.rbrActive.size() > 0
             for a = s.rbrActive.size() - 1 to 0 by 1
                 Zone zz = s.rbr.get(s.rbrActive.get(a))
-                if zz.bot >= curBot // ekor bawah base tertabrak
+                if (d == 0 or zz.start < bar_index) and zz.bot >= curBot
                     zz.dead := true
                     s.rbrActive.remove(a)
 
     [newDbd, newRbr]
-
 // =====================================================================
 //  OVERLAP
 // =====================================================================
