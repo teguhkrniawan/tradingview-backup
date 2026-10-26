@@ -1,5 +1,5 @@
 //@version=6
-indicator('7seas_scalping_assistant v1.6', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
+indicator('7seas_scalping_assistant v1.5', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
 
 // Angka versi di akhir harus sama dengan versi publish library seven_seas_core (lihat halaman script library)
 import michelle_lawardi/seven_seas_core/4 as core
@@ -104,6 +104,15 @@ zoneBaseLo(core.Zone z) =>
             l := math.min(l, store.loA.get(c))
     l
 
+// proximal ditentukan dari close candle setelah leg out (baseR + 2)
+// dflt dipakai selama candle itu belum close
+proxByClose(float bLo, float bHi, int baseR, float dflt) =>
+    float r = dflt
+    int c = baseR + 2
+    if bar_index > c
+        r := store.clsA.get(c) >= (bLo + bHi) / 2 ? bHi : bLo
+    r
+
 bodyEngulfDbg(core.Zone zn) =>
     float bt = store.topA.get(zn.baseL)
     float bb = store.botA.get(zn.baseL)
@@ -177,6 +186,12 @@ varip int flKey = na
 varip bool flConf = true
 varip int rfKey = na
 varip bool rfConf = true
+
+varip float flProx = na
+varip float rfProx = na
+
+varip bool flLogged = false
+varip bool rfLogged = false
 
 addLog(array<string> arr, string m) =>
     if ready
@@ -546,9 +561,10 @@ if barstate.islast
             table.cell(sellTbl, 0, 1, upTxt, text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = color.new(color.black, 30))
             table.cell(buyTbl, 0, 1, loTxt, text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = color.new(color.black, 30))
 
-                // 6) Calon lantai baru + confirm
-        float floorPx = na
-        float floorHi = na
+        // 6) Calon lantai baru + confirm
+        float floorPx = na   // proximal (hasil aturan close)
+        float floorLo = na   // low terendah base
+        float floorHi = na   // high tertinggi base
         int floorKey = na
         int floorBaseR = na
         for zi = store.rbr.size() - 1 to 0
@@ -566,26 +582,29 @@ if barstate.islast
                     px := math.min(px, store.loA.get(c))
                 minLow := math.min(minLow, store.loA.get(c))
             if px > botB and px < pinkY and minLow > botB
-                floorPx := px
+                floorLo := px
                 floorHi := zoneBaseHi(fz)
                 floorKey := fz.baseL
                 floorBaseR := fz.baseR
+                floorPx := proxByClose(floorLo, floorHi, floorBaseR, floorLo)
                 break
         if not na(floorPx)
-            // zona baru -> log calon
             if na(flKey) or floorKey != flKey
+                flKey := floorKey
+                flConf := false
+                flLogged := false
+            // log hanya sekali, setelah candle setelah leg out close (proximal sudah final)
+            if not flLogged and bar_index > floorBaseR + 2
                 string pF = str.tostring(floorPx, format.mintick)
                 string msgFl = 'Terbentuk calon lantai baru (unverified) di harga ' + pF + ' (proximal)'
                 string msgFlExit = 'Terbentuk calon lantai baru (unverified) + exit di harga ' + pF + ' (proximal)'
                 addLog(logS, (sellMax > 0 and floorPx < tpP) ? msgFlExit : msgFl)
                 addLog(logB, (buyMax > 0 and floorPx > tpP) ? msgFlExit : msgFl)
-                flKey := floorKey
-                flConf := false
-            // belum confirm -> cek candle setelah leg-out yang masuk area base
-            if not flConf and bar_index >= floorBaseR + 2
+                flLogged := true
+            if flLogged and not flConf
                 bool hitFl = false
                 for c = floorBaseR + 2 to bar_index
-                    if store.hiA.get(c) >= floorPx and store.loA.get(c) <= floorHi
+                    if store.hiA.get(c) >= floorLo and store.loA.get(c) <= floorHi
                         hitFl := true
                         break
                 if hitFl
@@ -595,15 +614,12 @@ if barstate.islast
                     flConf := true
         else
             flKey := na
-
-        if touchLo > 0
-            touchedLower := true
-        if touchUp > 0
-            touchedLower := false
+            flLogged := false
 
         // 7) Calon atap baru + confirm
-        float roofPx = na
-        float roofLo = na
+        float roofPx = na   // proximal (hasil aturan close)
+        float roofHi = na   // high tertinggi base
+        float roofLo = na   // low terendah base
         int roofKey = na
         int roofBaseR = na
         int checkedD = 0
@@ -621,24 +637,28 @@ if barstate.islast
                     py := math.max(py, store.hiA.get(c))
                 maxHigh := math.max(maxHigh, store.hiA.get(c))
             if py < topB and py > greenY and maxHigh < topB
-                roofPx := py
+                roofHi := py
                 roofLo := zoneBaseLo(rz)
                 roofKey := rz.baseL
                 roofBaseR := rz.baseR
+                roofPx := proxByClose(roofLo, roofHi, roofBaseR, roofHi)
                 break
         if not na(roofPx)
             if na(rfKey) or roofKey != rfKey
+                rfKey := roofKey
+                rfConf := false
+                rfLogged := false
+            if not rfLogged and bar_index > roofBaseR + 2
                 string pR = str.tostring(roofPx, format.mintick)
                 string msgRf = 'Terbentuk calon atap baru (unverified) di harga ' + pR + ' (proximal)'
                 string msgRfExit = 'Terbentuk calon atap baru (unverified) + exit di harga ' + pR + ' (proximal)'
                 addLog(logS, (sellMax > 0 and roofPx < tpP) ? msgRfExit : msgRf)
                 addLog(logB, (buyMax > 0 and roofPx > tpP) ? msgRfExit : msgRf)
-                rfKey := roofKey
-                rfConf := false
-            if not rfConf and bar_index >= roofBaseR + 2
+                rfLogged := true
+            if rfLogged and not rfConf
                 bool hitRf = false
                 for c = roofBaseR + 2 to bar_index
-                    if store.hiA.get(c) >= roofLo and store.loA.get(c) <= roofPx
+                    if store.hiA.get(c) >= roofLo and store.loA.get(c) <= roofHi
                         hitRf := true
                         break
                 if hitRf
@@ -648,8 +668,7 @@ if barstate.islast
                     rfConf := true
         else
             rfKey := na
-
-       
+            rfLogged := false
 
         
     // ---------- Log berjalan SELL & BUY (terbaru di atas) ----------
