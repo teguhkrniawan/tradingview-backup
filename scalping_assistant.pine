@@ -31,7 +31,8 @@ inShowCtrl = input.bool(true, 'Show Control Line', group = gSw)
 
 
 inPinkCol = input.color(color.rgb(255, 105, 180), 'Upper Zone Color (Swing High Control Line)', group = gSw)
-inGreenCol = input.color(color.lime, 'Lower Zone Color (Swing Low Control Line)', group = gSw)
+// inGreenCol = input.color(color.lime, 'Lower Zone Color (Swing Low Control Line)', group = gSw)
+inGreenCol = input.color(color.rgb(0, 110, 0), 'Lower Zone Color (Swing Low Control Line)', group = gSw)
 
 inManualPink = input.bool(false, "Manual Pink Control", group = gSw)
 inPinkMan = input.price(1.0, "Pink Control Price", group = gSw)
@@ -72,6 +73,33 @@ bodyEngulfed(core.Zone zn) =>
             hit := true
             break
     hit
+
+// true jika swing sudah ditembus candle mana pun setelah terbentuk (sampai bar sekarang)
+swingBroken(int idx, float p, bool isHigh) =>
+    bool br = false
+    if idx < bar_index
+        for c = idx + 1 to bar_index
+            float v = isHigh ? (inSwBasis == 'Wick' ? store.hiA.get(c) : store.topA.get(c)) : (inSwBasis == 'Wick' ? store.loA.get(c) : store.botA.get(c))
+            if isHigh ? v > p : v < p
+                br := true
+                break
+    br
+
+// high tertinggi dari seluruh candle base zona
+zoneBaseHi(core.Zone z) =>
+    float h = store.hiA.get(z.baseL)
+    if z.baseR > z.baseL
+        for c = z.baseL + 1 to z.baseR
+            h := math.max(h, store.hiA.get(c))
+    h
+
+// low terendah dari seluruh candle base zona
+zoneBaseLo(core.Zone z) =>
+    float l = store.loA.get(z.baseL)
+    if z.baseR > z.baseL
+        for c = z.baseL + 1 to z.baseR
+            l := math.min(l, store.loA.get(c))
+    l
 
 bodyEngulfDbg(core.Zone zn) =>
     float bt = store.topA.get(zn.baseL)
@@ -120,11 +148,14 @@ var array<line> lns = array.new<line>()
 var float lastSentPink = na
 var float lastSentGreen = na
 
-const int LOG_ROWS = 4
+const int LOG_ROWS = 5
 varip int sellMax = 0
 varip int buyMax = 0
 varip bool sellLock = false
 varip bool buyLock = false
+varip float lastFloorPx = na
+varip float lastRoofPx = na
+varip bool touchedLower = false
 varip array<string> logS = array.new<string>()
 varip array<string> logB = array.new<string>()
 var table sellTbl = table.new(position.bottom_left, 1, 3 + LOG_ROWS, border_width = 0)
@@ -134,6 +165,13 @@ addLog(array<string> arr, string m) =>
     arr.push(str.format_time(time, 'HH:mm', 'GMT+7') + '  ' + m)
     if arr.size() > LOG_ROWS
         arr.shift()
+
+// if newDbd
+//     core.Zone nz = store.dbd.last()
+//     float npy = store.hiA.get(nz.baseL)
+//     for c = nz.baseL + 1 to nz.baseR
+//         npy := math.max(npy, store.hiA.get(c))
+//     addLog(logB, 'Terbentuk calon atap baru , proximal ' + str.tostring(npy, format.mintick))
 
 // =====================================================================
 //  GAMBAR (hanya di bar terakhir)
@@ -151,15 +189,15 @@ if barstate.islast
     while lns.size() > 0
         line.delete(lns.pop())
 
-        table.cell(sellTbl, 0, 0, inShowTouch ? 'SELL INFO' : '', text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = color.new(color.gray, 40))
+    table.cell(sellTbl, 0, 0, inShowTouch ? 'SELL INFO' : '', text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = color.new(color.gray, 40))
     table.cell(sellTbl, 0, 1, inShowTouch ? 'SELL: -' : '', text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = color.new(color.black, 30))
     table.cell(buyTbl, 0, 0, inShowTouch ? 'BUY INFO' : '', text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = color.new(color.gray, 40))
     table.cell(buyTbl, 0, 1, inShowTouch ? 'BUY: -' : '', text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = color.new(color.black, 30))
     for r = 2 to 1 + LOG_ROWS
         table.cell(sellTbl, 0, r, '', text_color = color.white, text_size = size.small, text_halign = text.align_left)
         table.cell(buyTbl, 0, r, '', text_color = color.white, text_size = size.small, text_halign = text.align_left)
-    table.cell(buyTbl, 0, 2 + LOG_ROWS, '', height = 4, bgcolor = na)
     table.cell(sellTbl, 0, 2 + LOG_ROWS, '', height = 4, bgcolor = na)
+    table.cell(buyTbl, 0, 2 + LOG_ROWS, '', height = 4, bgcolor = na)
 
     core.resolveOverlap(store)
 
@@ -213,89 +251,121 @@ if barstate.islast
     pink = core.controlLine(store, true, swP, swIdx, swT)
     green = core.controlLine(store, false, swP, swIdx, swT)
 
-    
-
+    // ---------- Pilih swing acuan otomatis: high harus di atas harga, low harus di bawah harga ----------
     float lastSwH = na
     float lastSwL = na
+    int lastSwHIdx = na
+    int lastSwLIdx = na
     if swP.size() > 0
         for k = swP.size() - 1 to 0
-            if swT.get(k) == 1 and na(lastSwH)
+            if swT.get(k) == 1 and na(lastSwH) and swP.get(k) > close and not swingBroken(swIdx.get(k), swP.get(k), true)
                 lastSwH := swP.get(k)
-            if swT.get(k) == -1 and na(lastSwL)
+                lastSwHIdx := swIdx.get(k)
+            if swT.get(k) == -1 and na(lastSwL) and swP.get(k) < close and not swingBroken(swIdx.get(k), swP.get(k), false)
                 lastSwL := swP.get(k)
+                lastSwLIdx := swIdx.get(k)
             if not na(lastSwH) and not na(lastSwL)
                 break
 
     float pinkY = pink.exists ? (inManualPink ? inPinkMan : lastSwH) : na
     float greenY = green.exists ? (inManualGreen ? inGreenMan : lastSwL) : na
+    bool pinkOk = not na(pinkY)
+    bool greenOk = not na(greenY)
 
-    // ---------- Kirim garis control via alert (hanya jika berubah) ----------
-    if inSendAlert and pink.exists and green.exists
-        if na(lastSentPink) or na(lastSentGreen) or pinkY != lastSentPink or greenY != lastSentGreen
-            string payload = '{"symbol":"' + syminfo.tickerid + '","tf":"' + timeframe.period + '","upper":' + str.tostring(pinkY, format.mintick) + ',"lower":' + str.tostring(greenY, format.mintick) + ',"manualUpper":' + str.tostring(inManualPink) + ',"manualLower":' + str.tostring(inManualGreen) + ',"time":' + str.tostring(time) + '}'
-            alert(payload, alert.freq_once_per_bar_close)
-            lastSentPink := pinkY
-            lastSentGreen := greenY
+   
 
-    // ---------- Validasi ulang saat mode manual ----------
+    // ---------- Validasi ulang (manual DAN otomatis, karena swing acuan bisa beda dari library) ----------
     core.ControlLine pinkCl = pink
-    if inManualPink and pink.exists
-        pinkCl := core.controlLineAt(store, true, swP, swIdx, swT, inPinkMan)
+    if pinkOk
+        pinkCl := core.controlLineAt(store, true, swP, swIdx, swT, pinkY)
 
     core.ControlLine greenCl = green
-    if inManualGreen and green.exists
-        greenCl := core.controlLineAt(store, false, swP, swIdx, swT, inGreenMan)
+    if greenOk
+        greenCl := core.controlLineAt(store, false, swP, swIdx, swT, greenY)
 
     // Solid hanya jika zona yang kena benar-benar tergambar di chart
-    bool pinkValid = pinkCl.valid
+    bool pinkValid = pinkOk and pinkCl.valid
     if pinkValid
         int zidChkP = na(pinkCl.hitIdx) ? -1 : store.baseZone.get(pinkCl.hitIdx)
         pinkValid := zidChkP >= 0 and drawnDbd.includes(zidChkP)
 
-    bool greenValid = greenCl.valid
+    bool greenValid = greenOk and greenCl.valid
     if greenValid
         int zidChkG = na(greenCl.hitIdx) ? -1 : store.rbrBaseZone.get(greenCl.hitIdx)
         greenValid := zidChkG >= 0 and drawnRbr.includes(zidChkG)
 
-    // ---------- Titik awal garis: tepi kiri zona DBD / RBR yang kena ----------
-    // Jika belum solid (tidak kena zona), tetap mulai dari swing seperti semula.
-    int pinkStart = pink.swingIdx
+    // ---------- Titik awal garis ----------
+    int pinkStart = (inManualPink or na(lastSwHIdx)) ? pink.swingIdx : lastSwHIdx
     if pinkValid and not na(pinkCl.hitIdx)
         pinkStart := pinkCl.hitIdx
         int zidP = store.baseZone.get(pinkCl.hitIdx)
         if zidP >= 0 and zidP < store.dbd.size()
             pinkStart := store.dbd.get(zidP).left
 
-    int greenStart = green.swingIdx
+    int greenStart = (inManualGreen or na(lastSwLIdx)) ? green.swingIdx : lastSwLIdx
     if greenValid and not na(greenCl.hitIdx)
         greenStart := greenCl.hitIdx
         int zidG = store.rbrBaseZone.get(greenCl.hitIdx)
         if zidG >= 0 and zidG < store.rbr.size()
             greenStart := store.rbr.get(zidG).left
 
-    int pinkX = pink.exists ? math.max(pinkStart, minX) : na
-    int greenX = green.exists ? math.max(greenStart, minX) : na
+    // ---------- Garis pink harus di atas base DBD tertinggi di area yang kena ----------
+    if pinkValid and not inManualPink
+        core.Zone hzP = store.dbd.get(store.baseZone.get(pinkCl.hitIdx))
+        float hiBase = na
+        for zi = 0 to store.dbd.size() - 1
+            if not drawnDbd.includes(zi)
+                continue
+            core.Zone z = store.dbd.get(zi)
+            if z.left >= hzP.left and z.bot <= hzP.top and z.top >= hzP.bot
+                float b = zoneBaseHi(z)
+                hiBase := na(hiBase) ? b : math.max(hiBase, b)
+        if not na(hiBase)
+            pinkY := math.max(pinkY, hiBase + syminfo.mintick)
 
-    if inShowCtrl and pink.exists
+    // ---------- Garis hijau harus di bawah base RBR terendah di area yang kena ----------
+    if greenValid and not inManualGreen
+        core.Zone hzG = store.rbr.get(store.rbrBaseZone.get(greenCl.hitIdx))
+        float loBase = na
+        for zi = 0 to store.rbr.size() - 1
+            if not drawnRbr.includes(zi)
+                continue
+            core.Zone z = store.rbr.get(zi)
+            if z.left >= hzG.left and z.bot <= hzG.top and z.top >= hzG.bot
+                float b = zoneBaseLo(z)
+                loBase := na(loBase) ? b : math.min(loBase, b)
+        if not na(loBase)
+            greenY := math.min(greenY, loBase - syminfo.mintick)
+
+    // ---------- Kirim garis control via alert (hanya jika berubah) ----------
+    if inSendAlert and pinkOk and greenOk
+        if na(lastSentPink) or na(lastSentGreen) or pinkY != lastSentPink or greenY != lastSentGreen
+            string payload = '{"symbol":"' + syminfo.tickerid + '","tf":"' + timeframe.period + '","upper":' + str.tostring(pinkY, format.mintick) + ',"lower":' + str.tostring(greenY, format.mintick) + ',"manualUpper":' + str.tostring(inManualPink) + ',"manualLower":' + str.tostring(inManualGreen) + ',"time":' + str.tostring(time) + '}'
+            alert(payload, alert.freq_once_per_bar_close)
+            lastSentPink := pinkY
+            lastSentGreen := greenY
+
+    int pinkX = pinkOk ? math.max(pinkStart, minX) : na
+    int greenX = greenOk ? math.max(greenStart, minX) : na
+
+    if inShowCtrl and pinkOk
         lns.push(line.new(x1 = pinkX, y1 = pinkY, x2 = bar_index, y2 = pinkY, xloc = xloc.bar_index, extend = extend.right, color = inPinkCol, style = pinkValid ? line.style_solid : line.style_dashed, width = 2))
         if inShowNotes
             lbs.push(label.new(x = bar_index + 3, y = pinkY, xloc = xloc.bar_index, text = core.controlText(store, pinkCl, true), style = label.style_label_lower_left, color = color.new(color.black, 20), textcolor = inPinkCol, textalign = text.align_left, size = size.small))
 
-    if inShowCtrl and green.exists
+    if inShowCtrl and greenOk
         lns.push(line.new(x1 = greenX, y1 = greenY, x2 = bar_index, y2 = greenY, xloc = xloc.bar_index, extend = extend.right, color = inGreenCol, style = greenValid ? line.style_solid : line.style_dashed, width = 2))
         if inShowNotes
-            lbs.push(label.new(x = bar_index + 3, y = greenY, xloc = xloc.bar_index, text = core.controlText(store, greenCl, false), style = label.style_label_upper_left, color = color.new(color.black, 20), textcolor = inGreenCol, textalign = text.align_left, size = size.small))
-    
+            lbs.push(label.new(x = bar_index + 3, y = greenY, xloc = xloc.bar_index, text = core.controlText(store, greenCl, false), style = label.style_label_upper_left, color = color.new(color.black, 20), textcolor = inGreenCol, textalign = text.align_left, size = size.small))    
+
     // ---------- Zona Entry (25%) ----------
-    if pink.exists and green.exists and pinkY > greenY
+    if pinkOk and greenOk and pinkY > greenY
 
         int touchUp = 0
         int touchLo = 0
 
         [topB, botB, tpP] = core.fibZones(pinkY, greenY, 0.25)
         int fibLeft = math.max(pinkX, greenX)
-        bxs.push(box.new(left = fibLeft, top = pinkY, right = bar_index, bottom = topB, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(inPinkCol, 100), bgcolor = color.new(inPinkCol, 80)))
-        bxs.push(box.new(left = fibLeft, top = botB, right = bar_index, bottom = greenY, xloc = xloc.bar_index, extend = extend.right, border_color = color.new(inGreenCol, 100), bgcolor = color.new(inGreenCol, 80)))
         lns.push(line.new(x1 = fibLeft, y1 = tpP, x2 = bar_index, y2 = tpP, xloc = xloc.bar_index, extend = extend.right, color = color.gray, width = 2))
 
         for g = 0 to inGapCnt
@@ -319,7 +389,7 @@ if barstate.islast
         lbs.push(label.new(x = fibLeft, y = slUp, xloc = xloc.bar_index, text = 'SL', style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
         lbs.push(label.new(x = fibLeft, y = slLo, xloc = xloc.bar_index, text = 'SL', style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
 
-                // ---------- Memory trader + warning ----------
+        // ---------- Memory trader + warning ----------
         // 1) Cut loss: candle yang baru tutup (close[1]) melewati garis control
         if barstate.isnew
             if sellMax > 0 and close[1] > pinkY
@@ -337,33 +407,52 @@ if barstate.islast
         if touchLo == 0
             buyLock := false
 
-        // 3) Masuk / naik layer
+        // 3) Masuk / naik layer (dicatat satu per satu, dengan harga garis layer)
         if not sellLock and touchUp > sellMax
             int prevS = sellMax
             sellMax := touchUp
-            addLog(logS, prevS == 0 ? 'SELL masuk garis ' + str.tostring(sellMax) : 'SELL layer naik ke garis ' + str.tostring(sellMax))
+            for l = prevS + 1 to sellMax
+                float gS = inGapCnt + 1 - l
+                float pxS = pinkY - (pinkY - topB) * gS / inGapCnt
+                string pS = str.tostring(pxS, format.mintick)
+                addLog(logS, (prevS == 0 and l == 1) ? 'SELL masuk layer 1 di ' + pS : 'SELL layer naik ke layer ' + str.tostring(l) + ' di ' + pS)
             if sellMax >= inTpLayer and prevS < inTpLayer
-                addLog(logS, 'SELL garis ' + str.tostring(sellMax) + ': TP di PROXIMAL (garis 1)')
+                addLog(logS, 'SELL layer ' + str.tostring(sellMax) + ': TP di PROXIMAL (layer 1)')
 
         if not buyLock and touchLo > buyMax
             int prevB = buyMax
             buyMax := touchLo
-            addLog(logB, prevB == 0 ? 'BUY masuk garis ' + str.tostring(buyMax) : 'BUY layer naik ke garis ' + str.tostring(buyMax))
+            for l = prevB + 1 to buyMax
+                float gB = l - 1
+                float pxB = botB + (greenY - botB) * gB / inGapCnt
+                string pB = str.tostring(pxB, format.mintick)
+                addLog(logB, (prevB == 0 and l == 1) ? 'BUY masuk layer 1 di ' + pB : 'BUY layer naik ke layer ' + str.tostring(l) + ' di ' + pB)
             if buyMax >= inTpLayer and prevB < inTpLayer
-                addLog(logB, 'BUY garis ' + str.tostring(buyMax) + ': TP di PROXIMAL (garis 1)')
+                addLog(logB, 'BUY layer ' + str.tostring(buyMax) + ': TP di PROXIMAL (layer 1)')
+
+        // 3b) Harga menyentuh garis SL (merah): log, lalu reset posisi
+        if sellMax > 0 and high >= slUp
+            addLog(logS, 'CUT LOSS SELL KENA di ' + str.tostring(slUp, format.mintick) + ' (dari layer ' + str.tostring(sellMax) + ')')
+            sellMax := 0
+            sellLock := true
+
+        if buyMax > 0 and low <= slLo
+            addLog(logB, 'CUT LOSS BUY KENA di ' + str.tostring(slLo, format.mintick) + ' (dari layer ' + str.tostring(buyMax) + ')')
+            buyMax := 0
+            buyLock := true
 
         // 4) TP: pakai harga saat ini
         if sellMax > 0
             bool proxS = sellMax >= inTpLayer
             if close <= (proxS ? topB : tpP)
-                addLog(logS, 'TP SELL SEKARANG: harga di ' + (proxS ? 'proximal (garis 1)' : 'garis tengah'))
+                addLog(logS, 'TP SELL SEKARANG: harga di ' + (proxS ? 'proximal (layer 1)' : 'layer tengah'))
                 sellMax := 0
                 sellLock := true
 
         if buyMax > 0
             bool proxB = buyMax >= inTpLayer
             if close >= (proxB ? botB : tpP)
-                addLog(logB, 'TP BUY SEKARANG: harga di ' + (proxB ? 'proximal (garis 1)' : 'garis tengah'))
+                addLog(logB, 'TP BUY SEKARANG: harga di ' + (proxB ? 'proximal (layer 1)' : 'layer tengah'))
                 buyMax := 0
                 buyLock := true
 
@@ -372,16 +461,78 @@ if barstate.islast
             string upTxt = 'SELL: -'
             string loTxt = 'BUY: -'
             if sellMax > 0
-                upTxt := 'SELL AKTIF | max garis ' + str.tostring(sellMax) + ' | TP: ' + (sellMax >= inTpLayer ? 'proximal' : 'garis tengah')
+                upTxt := 'SELL AKTIF | max layer ' + str.tostring(sellMax) + ' | TP: ' + (sellMax >= inTpLayer ? 'proximal' : 'layer tengah')
             else if touchUp > 0
-                upTxt := 'SELL: selesai, tunggu harga keluar zona'
+                upTxt := 'SELL: selesai, menunggu area baru'
             if buyMax > 0
-                loTxt := 'BUY AKTIF | max garis ' + str.tostring(buyMax) + ' | TP: ' + (buyMax >= inTpLayer ? 'proximal' : 'garis tengah')
+                loTxt := 'BUY AKTIF | max layer ' + str.tostring(buyMax) + ' | TP: ' + (buyMax >= inTpLayer ? 'proximal' : 'layer tengah')
             else if touchLo > 0
-                loTxt := 'BUY: selesai, tunggu harga keluar zona'
+                loTxt := 'BUY: selesai, menunggu area baru'
             table.cell(sellTbl, 0, 1, upTxt, text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = color.new(color.black, 30))
             table.cell(buyTbl, 0, 1, loTxt, text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = color.new(color.black, 30))
 
+        // 6) Calon lantai baru -> masuk log SELL
+        float floorPx = na
+        for zi = store.rbr.size() - 1 to 0
+            if store.rbr.size() == 0
+                break
+            core.Zone fz = store.rbr.get(zi)
+            if fz.left < fibLeft or (store.rbr.size() - 1 - zi) >= 20
+                break
+            if not drawnRbr.includes(zi)
+                continue
+            float px = store.loA.get(fz.baseL)
+            float minLow = math.min(store.loA.get(fz.baseL), low)
+            for c = fz.baseL + 1 to bar_index
+                if c <= fz.baseR
+                    px := math.min(px, store.loA.get(c))
+                minLow := math.min(minLow, store.loA.get(c))
+            if px > botB and px < pinkY and minLow > botB
+                floorPx := px
+                break
+        if not na(floorPx)
+            if na(lastFloorPx) or floorPx != lastFloorPx
+                string msgFloor = 'Terbentuk calon lantai baru (unverified) di harga ' + str.tostring(floorPx, format.mintick) + ' (proximal)'
+                addLog(logS, msgFloor)
+                addLog(logB, msgFloor)
+                lastFloorPx := floorPx
+        else
+            lastFloorPx := na
+
+        if touchLo > 0
+            touchedLower := true
+        if touchUp > 0
+            touchedLower := false
+
+        // 7) Calon atap baru -> masuk log BUY
+        float roofPx = na
+        int checkedD = 0
+        for zi = store.dbd.size() - 1 to 0
+            core.Zone rz = store.dbd.get(zi)
+            if rz.baseL < fibLeft or checkedD >= 30
+                break
+            if not drawnDbd.includes(zi)
+                continue
+            checkedD += 1
+            float py = store.hiA.get(rz.baseL)
+            float maxHigh = math.max(store.hiA.get(rz.baseL), high)
+            for c = rz.baseL + 1 to bar_index
+                if c <= rz.baseR
+                    py := math.max(py, store.hiA.get(c))
+                maxHigh := math.max(maxHigh, store.hiA.get(c))
+            if py < topB and py > greenY and maxHigh < topB
+                roofPx := py
+                break
+        if not na(roofPx)
+            if na(lastRoofPx) or roofPx != lastRoofPx
+                string msgRoof = 'Terbentuk calon atap baru (unverified) di harga ' + str.tostring(roofPx, format.mintick) + ' (proximal), pertimbangkan TP di harga proximal'
+                addLog(logS, msgRoof)
+                addLog(logB, msgRoof)
+                lastRoofPx := roofPx
+        else
+            lastRoofPx := na
+
+        
     // ---------- Log berjalan SELL & BUY (terbaru di atas) ----------
     if inShowTouch
         for i = 0 to LOG_ROWS - 1
