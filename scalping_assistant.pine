@@ -1,8 +1,8 @@
 //@version=6
-indicator('7seas_scalping_assistant v1.3', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
+indicator('7seas_scalping_assistant v1.6', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
 
 // Angka versi di akhir harus sama dengan versi publish library seven_seas_core (lihat halaman script library)
-import michelle_lawardi/seven_seas_core/2 as core
+import michelle_lawardi/seven_seas_core/4 as core
 
 // =====================================================================
 //  INPUT
@@ -48,14 +48,15 @@ inShowNotes = input.bool(false, 'Show Control Notes', group = gSw, tooltip = 'Ta
 inSendAlert = input.bool(false, 'Send Control Lines via Alert', group = gSw, tooltip = 'Kirim garis control atas dan bawah lewat alert() setiap kali nilainya berubah. Buat alert dengan kondisi "Any alert() function call".')
 gTouch = 'Touch Info'
 inShowTouch = input.bool(true, 'Show Touch Info (Kiri Bawah)', group = gTouch)
-inTpLayer = input.int(4, 'Layer Mulai TP di Proximal', minval = 2, maxval = 21, group = gTouch, tooltip = 'Jika harga sudah mencapai garis ini (atau lebih dalam), TP dipindah dari garis tengah ke proximal (garis 1).')
+inTpLayer = input.int(4, 'Layer Mulai TP di Proximal', minval = 2, maxval = 21, group = gTouch, tooltip = 'Jika harga sudah mencapai garis ini (atau lebih dalam), TP dipindah dari TP Maximal ke proximal (garis 1).')
 
 inMaxBack = input.int(1500, 'Max Candle ke Belakang (Gambar)', minval = 300, maxval = 4800, step = 100, group = gTouch, tooltip = 'Objek yang lebih tua dari jumlah candle ini tidak digambar. Kalau muncul error "historical buffer limit", turunkan angkanya di bawah nilai limit di pesan error.')
 
 // =====================================================================
 //  CORE
 // =====================================================================
-var cfg = core.Config.new(sensitivity = inSens, devMode = true, avgLookback = inAvgLb, minGrade = inMinGrade, baseBodyCheck = inBaseBody, disableOverlap = inOverlap, swingBasis = inSwBasis)
+// var cfg = core.Config.new(sensitivity = inSens, devMode = true, avgLookback = inAvgLb, minGrade = inMinGrade, baseBodyCheck = inBaseBody, disableOverlap = inOverlap, swingBasis = inSwBasis)
+var cfg = core.Config.new(sensitivity = inSens, devMode = true, avgLookback = inAvgLb, minGrade = inMinGrade, baseBodyCheck = inBaseBody, disableOverlap = inOverlap, swingBasis = inSwBasis, tag = 'scalping')
 var store = core.newStore(cfg)
 
 // true = rentang body base tertutup utuh oleh body satu candle di kanan zona
@@ -68,10 +69,12 @@ bodyEngulfed(core.Zone zn) =>
             bt := math.max(bt, store.hiA.get(c))
             bb := math.min(bb, store.loA.get(c))
     bool hit = false
-    for k = zn.start to bar_index
-        if store.topA.get(k) >= bt and store.botA.get(k) <= bb
-            hit := true
-            break
+    int from = zn.start + core.shift(cfg)
+    if from <= bar_index
+        for k = from to bar_index
+            if store.topA.get(k) >= bt and store.botA.get(k) <= bb
+                hit := true
+                break
     hit
 
 // true jika swing sudah ditembus candle mana pun setelah terbentuk (sampai bar sekarang)
@@ -399,12 +402,12 @@ if barstate.islast
             lastSentGreen := greenY
 
     if inShowCtrl and pinkOk
-        lns.push(line.new(x1 = pinkX, y1 = pinkY, x2 = bar_index, y2 = pinkY, xloc = xloc.bar_index, extend = extend.right, color = inPinkCol, style = pinkValid ? line.style_solid : line.style_dashed, width = 2))
+        lns.push(line.new(x1 = pinkX, y1 = pinkY, x2 = bar_index, y2 = pinkY, xloc = xloc.bar_index, extend = extend.right, color = inPinkCol, style = pinkValid ? line.style_solid : line.style_dashed, width = 1))
         if inShowNotes
             lbs.push(label.new(x = bar_index + 3, y = pinkY, xloc = xloc.bar_index, text = core.controlText(store, pinkCl, true), style = label.style_label_lower_left, color = color.new(color.black, 20), textcolor = inPinkCol, textalign = text.align_left, size = size.small))
 
     if inShowCtrl and greenOk
-        lns.push(line.new(x1 = greenX, y1 = greenY, x2 = bar_index, y2 = greenY, xloc = xloc.bar_index, extend = extend.right, color = inGreenCol, style = greenValid ? line.style_solid : line.style_dashed, width = 2))
+        lns.push(line.new(x1 = greenX, y1 = greenY, x2 = bar_index, y2 = greenY, xloc = xloc.bar_index, extend = extend.right, color = inGreenCol, style = greenValid ? line.style_solid : line.style_dashed, width = 1))
         if inShowNotes
             lbs.push(label.new(x = bar_index + 3, y = greenY, xloc = xloc.bar_index, text = core.controlText(store, greenCl, false), style = label.style_label_upper_left, color = color.new(color.black, 20), textcolor = inGreenCol, textalign = text.align_left, size = size.small))    
 
@@ -416,7 +419,7 @@ if barstate.islast
 
         [topB, botB, tpP] = core.fibZones(pinkY, greenY, 0.25)
         int fibLeft = math.max(pinkX, greenX)
-        lns.push(line.new(x1 = fibLeft, y1 = tpP, x2 = bar_index, y2 = tpP, xloc = xloc.bar_index, extend = extend.right, color = color.gray, width = 2))
+        lns.push(line.new(x1 = fibLeft, y1 = tpP, x2 = bar_index, y2 = tpP, xloc = xloc.bar_index, extend = extend.right, color = color.gray, width = 1))
 
         for g = 0 to inGapCnt
             float f = g / float(inGapCnt)
@@ -428,16 +431,16 @@ if barstate.islast
                 touchLo := math.max(touchLo, g + 1)
             lns.push(line.new(x1 = fibLeft, y1 = yUp, x2 = bar_index, y2 = yUp, xloc = xloc.bar_index, extend = extend.right, color = inPinkCol, width = 1))
             lns.push(line.new(x1 = fibLeft, y1 = yLo, x2 = bar_index, y2 = yLo, xloc = xloc.bar_index, extend = extend.right, color = inGreenCol, width = 1))
-            lbs.push(label.new(x = fibLeft, y = yUp, xloc = xloc.bar_index, text = str.tostring(inGapCnt - g + 1), style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
-            lbs.push(label.new(x = fibLeft, y = yLo, xloc = xloc.bar_index, text = str.tostring(g + 1), style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
+            //lbs.push(label.new(x = fibLeft, y = yUp, xloc = xloc.bar_index, text = str.tostring(inGapCnt - g + 1), style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
+            //lbs.push(label.new(x = fibLeft, y = yLo, xloc = xloc.bar_index, text = str.tostring(g + 1), style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
 
         float zoneH = pinkY - topB
         float slUp = pinkY + zoneH * 0.2
         float slLo = greenY - zoneH * 0.2
-        lns.push(line.new(x1 = fibLeft, y1 = slUp, x2 = bar_index, y2 = slUp, xloc = xloc.bar_index, extend = extend.right, color = color.red, width = 2))
-        lns.push(line.new(x1 = fibLeft, y1 = slLo, x2 = bar_index, y2 = slLo, xloc = xloc.bar_index, extend = extend.right, color = color.red, width = 2))
-        lbs.push(label.new(x = fibLeft, y = slUp, xloc = xloc.bar_index, text = 'CL', style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
-        lbs.push(label.new(x = fibLeft, y = slLo, xloc = xloc.bar_index, text = 'CL', style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
+        lns.push(line.new(x1 = fibLeft, y1 = slUp, x2 = bar_index, y2 = slUp, xloc = xloc.bar_index, extend = extend.right, color = color.red, width = 1))
+        lns.push(line.new(x1 = fibLeft, y1 = slLo, x2 = bar_index, y2 = slLo, xloc = xloc.bar_index, extend = extend.right, color = color.red, width = 1))
+        // lbs.push(label.new(x = fibLeft, y = slUp, xloc = xloc.bar_index, text = 'CL', style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
+        // lbs.push(label.new(x = fibLeft, y = slLo, xloc = xloc.bar_index, text = 'CL', style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
 
         // ---------- Memory trader + warning ----------
         
@@ -513,14 +516,14 @@ if barstate.islast
         if sellMax > 0
             bool proxS = sellMax >= inTpLayer
             if close <= (proxS ? topB : tpP)
-                addLog(logS, 'TP SELL SEKARANG: harga di ' + (proxS ? 'proximal (layer 1)' : 'layer tengah'))
+                addLog(logS, 'TP SELL SEKARANG: harga di ' + (proxS ? 'proximal (layer 1)' : 'TP Maximal'))
                 sellMax := 0
                 sellLock := true
 
         if buyMax > 0
             bool proxB = buyMax >= inTpLayer
             if close >= (proxB ? botB : tpP)
-                addLog(logB, 'TP BUY SEKARANG: harga di ' + (proxB ? 'proximal (layer 1)' : 'layer tengah'))
+                addLog(logB, 'TP BUY SEKARANG: harga di ' + (proxB ? 'proximal (layer 1)' : 'TP Maximal'))
                 buyMax := 0
                 buyLock := true
 
@@ -529,11 +532,11 @@ if barstate.islast
             string upTxt = 'SELL: -'
             string loTxt = 'BUY: -'
             if sellMax > 0
-                upTxt := 'SELL AKTIF | max layer ' + str.tostring(sellMax) + ' | TP: ' + (sellMax >= inTpLayer ? 'proximal' : 'layer tengah')
+                upTxt := 'SELL AKTIF | max layer ' + str.tostring(sellMax) + ' | TP: ' + (sellMax >= inTpLayer ? 'proximal' : 'TP Maximal')
             else if touchUp > 0
                 upTxt := 'SELL: selesai, menunggu area baru'
             if buyMax > 0
-                loTxt := 'BUY AKTIF | max layer ' + str.tostring(buyMax) + ' | TP: ' + (buyMax >= inTpLayer ? 'proximal' : 'layer tengah')
+                loTxt := 'BUY AKTIF | max layer ' + str.tostring(buyMax) + ' | TP: ' + (buyMax >= inTpLayer ? 'proximal' : 'TP Maximal')
             else if touchLo > 0
                 loTxt := 'BUY: selesai, menunggu area baru'
 
