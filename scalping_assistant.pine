@@ -182,6 +182,7 @@ bandCol(int k) =>
 // Satu box per area (dari garis pertama sampai garis terakhir), teks "Area X" di tengah
 // k = nomor area (0 = A, 1 = B, ...)
 // lim = batas area global (atrLim), dipakai sama untuk semua area
+// lim = batas area global (atrLim), dipakai sama untuk semua area
 drawBands(float yTop, float yBot, int left, int k, float lim, array<box> bx, array<label> lb) =>
     int right = bar_index + 5
     bx.push(box.new(left = left, top = yTop, right = right, bottom = yBot, xloc = xloc.bar_index, border_color = na, bgcolor = bandCol(k)))
@@ -190,10 +191,11 @@ drawBands(float yTop, float yBot, int left, int k, float lim, array<box> bx, arr
     bool over = not na(lim) and hx10 > lim
     color atrCol = over ? color.red : color.black
     float yMid = (yTop + yBot) / 2
-    // teks ATR di paling kanan, teks Area di sebelah kirinya
-    lb.push(label.new(x = right, y = yMid, xloc = xloc.bar_index, text = '| ATR: ' + str.tostring(hx10, format.mintick), style = label.style_label_right, color = color.new(color.black, 100), textcolor = atrCol, size = size.small))
-    lb.push(label.new(x = right - 8, y = yMid, xloc = xloc.bar_index, text = nm, style = label.style_label_right, color = color.new(color.black, 100), textcolor = chart.fg_color, size = size.small))
-
+    string limTxt = na(lim) ? 'n/a' : str.tostring(lim, format.mintick)
+    string atrTxt = '| ' + str.tostring(hx10, format.mintick) + ' ( ATR : ' + limTxt + ' )'
+    // teks tinggi area + batas di paling kanan, teks Area di sebelah kirinya
+    lb.push(label.new(x = right, y = yMid, xloc = xloc.bar_index, text = atrTxt, style = label.style_label_right, color = color.new(color.black, 100), textcolor = atrCol, size = size.small))
+    lb.push(label.new(x = right - 22, y = yMid, xloc = xloc.bar_index, text = nm, style = label.style_label_right, color = color.new(color.black, 100), textcolor = chart.fg_color, size = size.small))
 
 // proximal ditentukan dari close candle setelah leg out (baseR + 2)
 // dflt dipakai selama candle itu belum close
