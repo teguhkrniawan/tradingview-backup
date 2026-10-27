@@ -1,5 +1,5 @@
 //@version=6
-indicator('7seas_scalping_assistant v2.5', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
+indicator('7seas_scalping_assistant v2.6', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
 
 // Angka versi di akhir harus sama dengan versi publish library seven_seas_core (lihat halaman script library)
 import michelle_lawardi/seven_seas_core/6 as core
@@ -29,12 +29,13 @@ inPinkCol =color.rgb(255, 105, 180)
 inGreenCol = color.rgb(0, 110, 0)
 
 gSw = "Scalping Indicator"
-inManualPink = input.bool(false, "Manual Pink Control", group = gSw)
-inPinkMan = input.price(1.0, "Pink Control Price", group = gSw)
-inManualGreen = input.bool(false, "Manual Green Control", group = gSw)
-inGreenMan = input.price(1.0, "Green Control Price", group = gSw)
-inGapCnt = input.int(4, 'Jumlah Gap Garis Zona', minval = 1, maxval = 20, group = gSw, tooltip = 'Jumlah gap di tiap zona. Isi 4 berarti terbentuk 5 garis di zona atas dan 5 garis di zona bawah.')
+inManualPink = input.bool(false, "Swing High Control Line", group = gSw)
+inPinkMan = input.price(1.0, "Input Swing High Control Line Price", group = gSw)
+inManualGreen = input.bool(false, "Swing High Control Line", group = gSw)
+inGreenMan = input.price(1.0, "Input Swing Low Control Line Price", group = gSw)
+inGapCnt = input.int(4, 'No Of Trade Positions In Buy/Sell Area', minval = 1, maxval = 20, group = gSw, tooltip = 'Jumlah gap di tiap zona. Isi 4 berarti terbentuk 5 garis di zona atas dan 5 garis di zona bawah.')
 inClPct = input.float(20.0, 'Cut Loss (% tinggi area)', minval = 1.0, maxval = 100.0, step = 5.0, group = gSw, tooltip = 'Jarak garis CL (merah) dari garis control, dihitung sebagai persen dari tinggi area upper/lower (25%). Default 20.')
+inShowBackup = input.bool(true, 'Show Backup Control Lines (2 Atap + 2 Lantai)', group = gSw)
 
 gScan = 'Scan'
 inShow15 = input.bool(true, 'Show DBD/RBR Scan', group = gScan)
@@ -86,6 +87,27 @@ bodyEngulfed(core.Zone zn) =>
                 break
     hitHi and hitLo
 
+// Mandatory 14: ambil nilai paling bawah base (ekor/body), bandingkan dengan low leg-in.
+// Base tidak boleh menembus ke bawah lebih dari 10% tinggi leg-in.
+legInCheck(core.Zone zn) =>
+    bool bad = false
+    string msg = ''
+    int li = zn.baseL - 1
+    if li >= 0
+        bool wick = inSwBasis == 'Wick'
+        float lHi = wick ? store.hiA.get(li) : store.topA.get(li)
+        float lLo = wick ? store.loA.get(li) : store.botA.get(li)
+        float lim = (lHi - lLo) * 0.10
+        float bLow = wick ? store.loA.get(zn.baseL) : store.botA.get(zn.baseL)
+        for c = zn.baseL + 1 to zn.baseR
+            float v = wick ? store.loA.get(c) : store.botA.get(c)
+            bLow := math.min(bLow, v)
+        float pen = lLo - bLow
+        if pen > lim
+            bad := true
+            msg := '[14] Bagian bawah base (' + (wick ? 'ekor' : 'body') + ') ' + str.tostring(bLow, format.mintick) + ' menembus di bawah low leg-in (' + str.tostring(lLo, format.mintick) + ') sebesar ' + str.tostring(pen, format.mintick) + ', lebih dari batas 10% tinggi leg-in (' + str.tostring(lim, format.mintick) + ')'
+    [bad, msg]
+
 // true jika swing sudah ditembus candle mana pun setelah terbentuk (sampai bar sekarang)
 swingBroken(int idx, float p, bool isHigh) =>
     bool br = false
@@ -112,6 +134,38 @@ zoneBaseLo(core.Zone z) =>
         for c = z.baseL + 1 to z.baseR
             l := math.min(l, store.loA.get(c))
     l
+
+// Cari swing berikutnya yang belum ditembus.
+// isHigh = true : swing high terendah yang masih di atas 'ref'
+// isHigh = false: swing low tertinggi yang masih di bawah 'ref'
+nextSwing(array<float> p, array<int> ix, array<int> t, float ref, bool isHigh) =>
+    float bestP = na
+    int bestI = na
+    if p.size() > 0
+        for k = 0 to p.size() - 1
+            if t.get(k) == (isHigh ? 1 : -1)
+                float pk = p.get(k)
+                bool inSide = isHigh ? pk > ref : pk < ref
+                bool better = na(bestP) or (isHigh ? pk < bestP : pk > bestP)
+                if inSide and better and not swingBroken(ix.get(k), pk, isHigh)
+                    bestP := pk
+                    bestI := ix.get(k)
+    [bestP, bestI]
+
+// Garis fibo berulang untuk garis cadangan (sama seperti zona entry garis utama)
+// isRoof = true : gap turun dari garis, CL di atas garis
+// isRoof = false: gap naik dari garis, CL di bawah garis
+drawBackupFib(float y, bool isRoof, float h, int left, bool valid, color col, array<line> ls, array<label> lb) =>
+    for g = 0 to inGapCnt
+        float f = g / float(inGapCnt)
+        float yy = isRoof ? y - h * f : y + h * f
+        // g = 0 adalah garis control cadangan itu sendiri (sudah digambar), jadi dilewati
+        if g > 0
+            ls.push(line.new(x1 = left, y1 = yy, x2 = bar_index + 5, y2 = yy, xloc = xloc.bar_index, color = col, width = 1))
+            lb.push(label.new(x = bar_index + 5, y = yy, xloc = xloc.bar_index, text = str.tostring(yy, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = col, size = size.small))
+    float sl = isRoof ? y + h * (inClPct / 100.0) : y - h * (inClPct / 100.0)
+    ls.push(line.new(x1 = left, y1 = sl, x2 = bar_index + 5, y2 = sl, xloc = xloc.bar_index, color = color.red, width = 1))
+    lb.push(label.new(x = bar_index + 5, y = sl, xloc = xloc.bar_index, text = str.tostring(sl, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.red, size = size.small))
 
 // proximal ditentukan dari close candle setelah leg out (baseR + 2)
 // dflt dipakai selama candle itu belum close
@@ -163,11 +217,16 @@ float atrD = request.security(syminfo.tickerid, 'D', ta.atr(14), lookahead = bar
 float atrLim = atrD * 10 * 0.2 * 0.25
 bool atrSrcOk = not na(atrD)
 
-// Tambahkan kode 13 ke tooltip jika zona ketabrak tapi tetap digambar (DEV MODE)
-tipEngulf(string t, bool engulfed) =>
+// Gabungkan kode 13 dan 14 ke satu bagian "Mandatory (lolos karena DEV MODE)"
+tipEngulf(string t, bool engulfed, string legMsg) =>
     string r = cleanTip(t)
+    string extra = ''
     if engulfed
-        r := r + '\n\nMandatory (lolos karena DEV MODE):\n[13] High dan low base sudah sama-sama dikena candle di kanan'
+        extra += '\n[13] High dan low base sudah sama-sama dikena candle di kanan'
+    if legMsg != ''
+        extra += '\n' + legMsg
+    if extra != ''
+        r := r + '\n\nMandatory (lolos karena DEV MODE):' + extra
     r
 
 // WAJIB dipanggil di setiap bar
@@ -339,12 +398,12 @@ if barstate.islast
             if drawn >= 150
                 break
             core.Zone zn = store.dbd.get(zi)
-            if not zn.supp and (inDevMode or not bodyEngulfed(zn)) and zn.right >= minX
+            [legBad, legMsg] = legInCheck(zn)
+            if not zn.supp and (inDevMode or (not bodyEngulfed(zn) and not legBad)) and zn.right >= minX
                 color col = zn.isSingle ? color.blue : color.orange
                 bxs.push(box.new(left = math.max(zn.left, minX), top = zn.top, right = bar_index, bottom = zn.bot, xloc = xloc.bar_index, border_color = col, border_width = 1, bgcolor = color.new(col, 85)))
                 if inShowLbl and zn.lblX >= minX
-                    // lbs.push(label.new(x = zn.lblX, y = zn.top, xloc = xloc.bar_index, text = zn.txt, style = label.style_label_down, color = zn.isSingle ? color.yellow : color.orange, textcolor = color.black, size = size.tiny, tooltip = tipEngulf(zn.tip, inDevMode and bodyEngulfed(zn)) + '\n\n' + bodyEngulfDbg(zn)))
-                    lbs.push(label.new(x = zn.lblX, y = zn.top, xloc = xloc.bar_index, text = zn.txt, style = label.style_label_down, color = zn.isSingle ? color.yellow : color.orange, textcolor = color.black, size = size.tiny, tooltip = tipEngulf(zn.tip, inDevMode and bodyEngulfed(zn))))
+                    lbs.push(label.new(x = zn.lblX, y = zn.top, xloc = xloc.bar_index, text = zn.txt, style = label.style_label_down, color = zn.isSingle ? color.yellow : color.orange, textcolor = color.black, size = size.tiny, tooltip = tipEngulf(zn.tip, inDevMode and bodyEngulfed(zn), inDevMode ? legMsg : '')))
                 drawnDbd.push(zi)
                 drawn += 1
 
@@ -355,12 +414,12 @@ if barstate.islast
             if drawn >= 150
                 break
             core.Zone zn = store.rbr.get(zi)
-            if not zn.supp and (inDevMode or not bodyEngulfed(zn)) and zn.right >= minX
+            [legBad, legMsg] = legInCheck(zn)
+            if not zn.supp and (inDevMode or (not bodyEngulfed(zn) and not legBad)) and zn.right >= minX
                 color col = zn.isSingle ? color.green : color.teal
                 bxs.push(box.new(left = math.max(zn.left, minX), top = zn.top, right = bar_index, bottom = zn.bot, xloc = xloc.bar_index, border_color = col, border_width = 1, bgcolor = color.new(col, 85)))
                 if inShowLbl and zn.lblX >= minX
-                    // lbs.push(label.new(x = zn.lblX, y = zn.bot, xloc = xloc.bar_index, text = zn.txt, style = label.style_label_up, color = col, textcolor = zn.isSingle ? color.black : color.white, size = size.tiny, tooltip = tipEngulf(zn.tip, inDevMode and bodyEngulfed(zn)) + '\n\n' + bodyEngulfDbg(zn)))
-                    lbs.push(label.new(x = zn.lblX, y = zn.bot, xloc = xloc.bar_index, text = zn.txt, style = label.style_label_up, color = col, textcolor = zn.isSingle ? color.black : color.white, size = size.tiny, tooltip = tipEngulf(zn.tip, inDevMode and bodyEngulfed(zn)) ))
+                    lbs.push(label.new(x = zn.lblX, y = zn.bot, xloc = xloc.bar_index, text = zn.txt, style = label.style_label_up, color = col, textcolor = zn.isSingle ? color.black : color.white, size = size.tiny, tooltip = tipEngulf(zn.tip, inDevMode and bodyEngulfed(zn), inDevMode ? legMsg : '')))
                 drawnRbr.push(zi)
                 drawn += 1
 
@@ -541,14 +600,87 @@ if barstate.islast
             lastSentGreen := greenY
 
     if inShowCtrl and pinkOk
-        lns.push(line.new(x1 = pinkX, y1 = pinkY, x2 = bar_index, y2 = pinkY, xloc = xloc.bar_index, extend = extend.right, color = inPinkCol, style = pinkValid ? line.style_solid : line.style_dashed, width = 1))
+        lns.push(line.new(x1 = pinkX, y1 = pinkY, x2 = bar_index + 5, y2 = pinkY, xloc = xloc.bar_index, color = inPinkCol, style = pinkValid ? line.style_solid : line.style_dashed, width = 1))
         if inShowNotes
             lbs.push(label.new(x = bar_index + 3, y = pinkY, xloc = xloc.bar_index, text = core.controlText(store, pinkCl, true), style = label.style_label_lower_left, color = color.new(color.black, 20), textcolor = inPinkCol, textalign = text.align_left, size = size.small))
 
     if inShowCtrl and greenOk
-        lns.push(line.new(x1 = greenX, y1 = greenY, x2 = bar_index, y2 = greenY, xloc = xloc.bar_index, extend = extend.right, color = inGreenCol, style = greenValid ? line.style_solid : line.style_dashed, width = 1))
+        lns.push(line.new(x1 = greenX, y1 = greenY, x2 = bar_index + 5, y2 = greenY, xloc = xloc.bar_index, color = inGreenCol, style = greenValid ? line.style_solid : line.style_dashed, width = 1))
         if inShowNotes
             lbs.push(label.new(x = bar_index + 3, y = greenY, xloc = xloc.bar_index, text = core.controlText(store, greenCl, false), style = label.style_label_upper_left, color = color.new(color.black, 20), textcolor = inGreenCol, textalign = text.align_left, size = size.small))    
+
+    // ---------- Garis Control Cadangan: 2 atap (di atas pink) + 2 lantai (di bawah hijau) ----------
+    if inShowBackup and inShowCtrl
+        float fibH = (pinkOk and greenOk and pinkY > greenY) ? (pinkY - greenY) * 0.25 : na
+        if pinkOk
+            float prevH = pinkY
+            for n = 1 to 2
+                [bpH, biH] = nextSwing(swP, swIdx, swT, prevH, true)
+                if na(bpH)
+                    break
+                core.ControlLine bcH = core.controlLineAt(store, true, swP, swIdx, swT, bpH)
+                bool bValidH = bcH.valid
+                int bStartH = biH
+                float bYH = bpH
+                if bValidH
+                    int zidBH = na(bcH.hitIdx) ? -1 : store.baseZone.get(bcH.hitIdx)
+                    bValidH := zidBH >= 0 and drawnDbd.includes(zidBH)
+                    if bValidH
+                        core.Zone hzBH = store.dbd.get(zidBH)
+                        bStartH := hzBH.left
+                        // garis ke atas base DBD tertinggi di area yang kena
+                        float hiBaseB = na
+                        for zi = 0 to store.dbd.size() - 1
+                            if not drawnDbd.includes(zi)
+                                continue
+                            core.Zone zb = store.dbd.get(zi)
+                            if zb.left >= hzBH.left and zb.bot <= hzBH.top and zb.top >= hzBH.bot
+                                float bb = zoneBaseHi(zb)
+                                hiBaseB := na(hiBaseB) ? bb : math.max(hiBaseB, bb)
+                        if not na(hiBaseB)
+                            bYH := math.max(bpH, hiBaseB + syminfo.mintick)
+                int bxH = math.max(bStartH, minX)
+                lns.push(line.new(x1 = bxH, y1 = bYH, x2 = bar_index, y2 = bYH, xloc = xloc.bar_index, extend = extend.right, color = color.new(inPinkCol, 40), style = bValidH ? line.style_solid : line.style_dashed, width = 1))
+                lns.push(line.new(x1 = bxH, y1 = bYH, x2 = bar_index + 5, y2 = bYH, xloc = xloc.bar_index, color = color.new(inPinkCol, 40), style = bValidH ? line.style_solid : line.style_dashed, width = 1))
+                if not na(fibH)
+                    drawBackupFib(bYH, true, fibH, bxH, bValidH, inPinkCol, lns, lbs)
+                prevH := bYH
+
+        if greenOk
+            float prevL = greenY
+            for n = 1 to 2
+                [bpL, biL] = nextSwing(swP, swIdx, swT, prevL, false)
+                if na(bpL)
+                    break
+                core.ControlLine bcL = core.controlLineAt(store, false, swP, swIdx, swT, bpL)
+                bool bValidL = bcL.valid
+                int bStartL = biL
+                float bYL = bpL
+                if bValidL
+                    int zidBL = na(bcL.hitIdx) ? -1 : store.rbrBaseZone.get(bcL.hitIdx)
+                    bValidL := zidBL >= 0 and drawnRbr.includes(zidBL)
+                    if bValidL
+                        core.Zone hzBL = store.rbr.get(zidBL)
+                        bStartL := hzBL.left
+                        // garis ke bawah base RBR terendah di area yang kena
+                        float loBaseB = na
+                        for zi = 0 to store.rbr.size() - 1
+                            if not drawnRbr.includes(zi)
+                                continue
+                            core.Zone zb = store.rbr.get(zi)
+                            if zb.left >= hzBL.left and zb.bot <= hzBL.top and zb.top >= hzBL.bot
+                                float bb = zoneBaseLo(zb)
+                                loBaseB := na(loBaseB) ? bb : math.min(loBaseB, bb)
+                        if not na(loBaseB)
+                            bYL := math.min(bpL, loBaseB - syminfo.mintick)
+                int bxL = math.max(bStartL, minX)
+                lns.push(line.new(x1 = bxL, y1 = bYL, x2 = bar_index + 5, y2 = bYL, xloc = xloc.bar_index, color = color.new(inGreenCol, 40), style = bValidL ? line.style_solid : line.style_dashed, width = 1))
+                // lbs.push(label.new(x = bar_index + 3, y = bYL, xloc = xloc.bar_index, text = 'Lantai Cadangan ' + str.tostring(n) + ' | ' + str.tostring(bYL, format.mintick), style = label.style_label_upper_left, color = color.new(color.black, 100), textcolor = inGreenCol, size = size.small))
+                if not na(fibH)
+                    drawBackupFib(bYL, false, fibH, bxL, bValidL, inGreenCol, lns, lbs)
+                prevL := bYL
+
+
 
     // ---------- Zona Entry (25%) ----------
     if pinkOk and greenOk and pinkY > greenY
