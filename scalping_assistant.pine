@@ -51,8 +51,8 @@ inShowTouch = input.bool(true, 'Show Touch Info (Kiri Bawah)', group = gTouch)
 inTpLayer = input.int(4, 'Layer Mulai TP di Proximal', minval = 2, maxval = 21, group = gTouch, tooltip = 'Jika harga sudah mencapai garis ini (atau lebih dalam), TP dipindah dari TP Maximal ke proximal (garis 1).')
 
 inMaxBack = input.int(1500, 'Max Candle ke Belakang (Gambar)', minval = 300, maxval = 4800, step = 100, group = gTouch, tooltip = 'Objek yang lebih tua dari jumlah candle ini tidak digambar. Kalau muncul error "historical buffer limit", turunkan angkanya di bawah nilai limit di pesan error.')
-// inAtrLen = input.int(14, 'ATR Daily Length', minval = 1, group = gTouch)
-inAtrSrc = input.source(close, 'Sumber ATR (pilih: Average True Range > ATR)', group = gTouch)
+
+
 
 // =====================================================================
 //  CORE
@@ -61,8 +61,8 @@ inAtrSrc = input.source(close, 'Sumber ATR (pilih: Average True Range > ATR)', g
 var cfg = core.Config.new(sensitivity = inSens, devMode = true, avgLookback = inAvgLb, minGrade = inMinGrade, baseBodyCheck = inBaseBody, disableOverlap = inOverlap, swingBasis = inSwBasis, tag = 'scalping')
 var store = core.newStore(cfg)
 
-// true = rentang body base tertutup utuh oleh body satu candle di kanan zona
-// true = rentang high-low base tertutup utuh oleh body satu candle di kanan zona
+// true = high base DAN low base sama-sama sudah dikena candle di kanan (setelah leg out)
+// dua sisi boleh dikena candle yang berbeda; "kena" = rentang high-low candle melewati level itu
 bodyEngulfed(core.Zone zn) =>
     float bt = store.hiA.get(zn.baseL)
     float bb = store.loA.get(zn.baseL)
@@ -70,14 +70,20 @@ bodyEngulfed(core.Zone zn) =>
         for c = zn.baseL + 1 to zn.baseR
             bt := math.max(bt, store.hiA.get(c))
             bb := math.min(bb, store.loA.get(c))
-    bool hit = false
+    bool hitHi = false
+    bool hitLo = false
     int from = zn.start + core.shift(cfg)
     if from <= bar_index
         for k = from to bar_index
-            if store.topA.get(k) >= bt and store.botA.get(k) <= bb
-                hit := true
+            float hk = store.hiA.get(k)
+            float lk = store.loA.get(k)
+            if hk >= bt and lk <= bt
+                hitHi := true
+            if hk >= bb and lk <= bb
+                hitLo := true
+            if hitHi and hitLo
                 break
-    hit
+    hitHi and hitLo
 
 // true jika swing sudah ditembus candle mana pun setelah terbentuk (sampai bar sekarang)
 swingBroken(int idx, float p, bool isHigh) =>
@@ -139,19 +145,18 @@ cleanTip(string t) =>
         r := str.replace_all(r, 'Mandatory (lolos karena DEV MODE):', 'Non mandatory (skor):')
     r
 
-// batas tinggi area: ATR daily * 10 * 20%, lalu * 25%
-// ATR pakem: selalu dari indikator ATR di chart (harus diset Timeframe = 1 day)
+// ATR Daily bawaan TradingView (RMA 14), tanpa perlu pasang indikator ATR
+// tanpa [1] dan lookahead_off, jadi nilainya sama dengan indikator ATR di chart Daily (hari berjalan)
+float atrD = request.security(syminfo.tickerid, 'D', ta.atr(14), lookahead = barmerge.lookahead_off)
 // batas tinggi area = ATR * 10 * 20% * 25%
-float atrLim = inAtrSrc * 10 * 0.2 * 0.25
-bool atrSrcOk = inAtrSrc != close
-
-
+float atrLim = atrD * 10 * 0.2 * 0.25
+bool atrSrcOk = not na(atrD)
 
 // Tambahkan kode 13 ke tooltip jika zona ketabrak tapi tetap digambar (DEV MODE)
 tipEngulf(string t, bool engulfed) =>
     string r = cleanTip(t)
     if engulfed
-        r := r + '\n\nMandatory (lolos karena DEV MODE):\n[13] Rentang high-low base tertutup utuh oleh body candle di kanan'
+        r := r + '\n\nMandatory (lolos karena DEV MODE):\n[13] High dan low base sudah sama-sama dikena candle di kanan'
     r
 
 // WAJIB dipanggil di setiap bar
@@ -461,10 +466,10 @@ if barstate.islast
 
         float zoneH = pinkY - topB
 
-        // info ATR di header (sumber pakem: indikator ATR Daily)
-        string atrTxt = 'ATR: ' + str.tostring(atrLim, format.mintick)
+        // info ATR di header: ATR Daily mentah, batas, dan tinggi area upper
+        string atrTxt = 'ATR D: ' + str.tostring(atrD, format.mintick) + ' | Batas: ' + str.tostring(atrLim, format.mintick) + ' | Tinggi Area: ' + str.tostring(zoneH, format.mintick)
         bool atrOver = atrSrcOk and zoneH > atrLim
-        string atrWarn = not atrSrcOk ? '  |  PILIH SUMBER ATR (indikator ATR Daily)' : (atrOver ? '  |  WARNING! Area Buy/Sell > ATR (' + atrTxt + ')' : '  |  Tidak Ada Warning ATR (' + atrTxt + ')')
+        string atrWarn = not atrSrcOk ? '  |  ATR belum tersedia (Tinggi Area: ' + str.tostring(zoneH, format.mintick) + ')' : (atrOver ? '  |  WARNING! Area Buy/Sell > ATR (' + atrTxt + ')' : '  |  Tidak Ada Warning ATR (' + atrTxt + ')')
         table.cell(sellTbl, 0, 0, inShowTouch ? 'SELL INFO' + atrWarn : '', text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = (atrOver or not atrSrcOk) ? color.new(color.red, 30) : color.new(color.gray, 40))
 
         float slUp = pinkY + zoneH * 0.2
@@ -700,7 +705,8 @@ if barstate.islast
             table.cell(sellTbl, 0, 2 + i, ts, text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = ts == '' ? na : color.new(color.black, 30))
             table.cell(buyTbl, 0, 2 + i, tb, text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = tb == '' ? na : color.new(color.black, 30))
 
-    table.cell(buyTbl, 0, 0, 'BUY INFO | bar=' + str.tostring(bar_index) + ' pinkOk=' + str.tostring(pinkOk) + ' greenOk=' + str.tostring(greenOk) + ' pV=' + str.tostring(pinkValid) + ' gV=' + str.tostring(greenValid) + ' lkG=' + str.tostring(lkGreen, format.mintick) + ' gY=' + str.tostring(greenY, format.mintick) + ' low=' + str.tostring(low, format.mintick), text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = color.new(color.gray, 40))
+    // table.cell(buyTbl, 0, 0, 'BUY INFO | bar=' + str.tostring(bar_index) + ' pinkOk=' + str.tostring(pinkOk) + ' greenOk=' + str.tostring(greenOk) + ' pV=' + str.tostring(pinkValid) + ' gV=' + str.tostring(greenValid) + ' lkG=' + str.tostring(lkGreen, format.mintick) + ' gY=' + str.tostring(greenY, format.mintick) + ' low=' + str.tostring(low, format.mintick), text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = color.new(color.gray, 40))
+    table.cell(buyTbl, 0, 0, inShowTouch ? 'BUY INFO' : '', text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = color.new(color.gray, 40))
 
 
     ready := true
