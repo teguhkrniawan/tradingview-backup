@@ -1,5 +1,5 @@
 //@version=6
-indicator('7seas_scalping_assistant v1.6', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
+indicator('7seas_scalping_assistant v1.7', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
 
 // Angka versi di akhir harus sama dengan versi publish library seven_seas_core (lihat halaman script library)
 import michelle_lawardi/seven_seas_core/4 as core
@@ -491,7 +491,7 @@ if barstate.islast
                 float gS = inGapCnt + 1 - l
                 float pxS = pinkY - (pinkY - topB) * gS / inGapCnt
                 string pS = str.tostring(pxS, format.mintick)
-                addLog(logS, (prevS == 0 and l == 1) ? 'SELL masuk layer 1 di ' + pS : 'SELL layer naik ke layer ' + str.tostring(l) + ' di ' + pS)
+                addLog(logS, 'PO SELL layer ' + str.tostring(l) + ' terisi di ' + pS)
             if sellMax >= inTpLayer and prevS < inTpLayer
                 addLog(logS, 'SELL layer ' + str.tostring(sellMax) + ': TP di PROXIMAL (layer 1)')
 
@@ -502,7 +502,7 @@ if barstate.islast
                 float gB = l - 1
                 float pxB = botB + (greenY - botB) * gB / inGapCnt
                 string pB = str.tostring(pxB, format.mintick)
-                addLog(logB, (prevB == 0 and l == 1) ? 'BUY masuk layer 1 di ' + pB : 'BUY layer naik ke layer ' + str.tostring(l) + ' di ' + pB)
+                addLog(logB, 'PO BUY layer ' + str.tostring(l) + ' terisi di ' + pB)
             if buyMax >= inTpLayer and prevB < inTpLayer
                 addLog(logB, 'BUY layer ' + str.tostring(buyMax) + ': TP di PROXIMAL (layer 1)')
 
