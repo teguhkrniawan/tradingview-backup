@@ -1,5 +1,5 @@
 //@version=6
-indicator('7seas_scalping_assistant v2.1', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
+indicator('7seas_scalping_assistant v2.3', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
 
 // Angka versi di akhir harus sama dengan versi publish library seven_seas_core (lihat halaman script library)
 import michelle_lawardi/seven_seas_core/6 as core
@@ -52,6 +52,11 @@ inTpLayer = input.int(4, 'Layer Mulai TP di Proximal', minval = 2, maxval = 21, 
 
 inMaxBack = input.int(1500, 'Max Candle ke Belakang (Gambar)', minval = 300, maxval = 4800, step = 100, group = gTouch, tooltip = 'Objek yang lebih tua dari jumlah candle ini tidak digambar. Kalau muncul error "historical buffer limit", turunkan angkanya di bawah nilai limit di pesan error.')
 
+gScan = 'Scan'
+inShow15 = input.bool(true, 'Show DBD/RBR Scan', group = gScan)
+inLtf1 = input.int(15, 'LTF 1 (detik, 0 = nonaktif)', minval = 0, group = gScan, tooltip = 'Harus lebih kecil dari timeframe chart. Contoh: 5, 10, 15, 30.')
+inLtf2 = input.int(0, 'LTF 2 (detik, 0 = nonaktif)', minval = 0, group = gScan)
+inLtf3 = input.int(0, 'LTF 3 (detik, 0 = nonaktif)', minval = 0, group = gScan)
 
 
 // =====================================================================
@@ -175,6 +180,57 @@ tipEngulf(string t, bool engulfed) =>
 alertcondition(newDbd, 'DBD baru', 'Zona DBD baru terbentuk')
 alertcondition(newRbr, 'RBR baru', 'Zona RBR baru terbentuk')
 
+// deteksi DBD/RBR di konteks LTF. Kode: 1 = DBD, 2 = RBR, 3 = keduanya
+scanDetect() =>
+    core.Config c = core.Config.new(sensitivity = inSens, devMode = true, avgLookback = inAvgLb, minGrade = inMinGrade, baseBodyCheck = inBaseBody, tag = 'scalping')
+    [vDS, eDS, cDS] = core.dbdSingle(c)
+    [vRS, eRS, cRS] = core.rbrSingle(c)
+    [nDM, eDM, cDM] = core.dbdMultiple(c)
+    [nRM, eRM, cRM] = core.rbrMultiple(c)
+    ((vDS or nDM != 0) ? 1 : 0) + ((vRS or nRM != 0) ? 2 : 0)
+
+// catat bar_index candle chart yang punya sinyal (array dikirim sebagai argumen)
+scanRecord(array<int> res, array<int> idxD, array<int> idxR) =>
+    bool hasD = false
+    bool hasR = false
+    for v in res
+        if v == 1 or v == 3
+            hasD := true
+        if v == 2 or v == 3
+            hasR := true
+    if hasD and (idxD.size() == 0 or idxD.last() != bar_index)
+        idxD.push(bar_index)
+    if hasR and (idxR.size() == 0 or idxR.last() != bar_index)
+        idxR.push(bar_index)
+
+// syarat: LTF harus lebih kecil dari timeframe chart
+bool ok1 = inShow15 and inLtf1 > 0 and inLtf1 < timeframe.in_seconds()
+bool ok2 = inShow15 and inLtf2 > 0 and inLtf2 < timeframe.in_seconds()
+bool ok3 = inShow15 and inLtf3 > 0 and inLtf3 < timeframe.in_seconds()
+
+// timeframe selalu valid, walau inputnya 0 (nonaktif)
+ltfStr(int s) =>
+    s > 0 ? str.tostring(s) + 'S' : '1S'
+
+array<int> res1 = request.security_lower_tf(syminfo.tickerid, ltfStr(inLtf1), scanDetect())
+array<int> res2 = request.security_lower_tf(syminfo.tickerid, ltfStr(inLtf2), scanDetect())
+array<int> res3 = request.security_lower_tf(syminfo.tickerid, ltfStr(inLtf3), scanDetect())
+
+var array<int> d1 = array.new_int()
+var array<int> r1 = array.new_int()
+var array<int> d2 = array.new_int()
+var array<int> r2 = array.new_int()
+var array<int> d3 = array.new_int()
+var array<int> r3 = array.new_int()
+
+if ok1
+    scanRecord(res1, d1, r1)
+if ok2
+    scanRecord(res2, d2, r2)
+if ok3
+    scanRecord(res3, d3, r3)
+
+
 // =====================================================================
 //  DRAWING STATE
 // =====================================================================
@@ -233,14 +289,17 @@ addLogAt(array<string> arr, string m, int t) =>
         if arr.size() > LOG_ROWS
             arr.shift()
 
-// if newDbd
-//     core.Zone nz = store.dbd.last()
-//     float npy = store.hiA.get(nz.baseL)
-//     for c = nz.baseL + 1 to nz.baseR
-//         npy := math.max(npy, store.hiA.get(c))
-//     addLog(logB, 'Terbentuk calon atap baru , proximal ' + str.tostring(npy, format.mintick))
+// gambar garis pendek 2 candle di tengah body, teks di kanan garis
+scanDraw(array<int> idxs, string txt, color col, int minX, array<line> ls, array<label> lb) =>
+    if idxs.size() > 0
+        for k = math.max(idxs.size() - 15, 0) to idxs.size() - 1
+            int xi = idxs.get(k)
+            if xi >= minX
+                float mid = (store.topA.get(xi) + store.botA.get(xi)) / 2
+                ls.push(line.new(x1 = xi, y1 = mid, x2 = xi + 1, y2 = mid, xloc = xloc.bar_index, color = col, width = 2))
+                lb.push(label.new(x = xi + 1, y = mid, xloc = xloc.bar_index, text = txt, style = label.style_label_left, color = color.new(color.black, 100), textcolor = col, size = size.tiny))
 
-// =====================================================================
+                // =====================================================================
 //  GAMBAR (hanya di bar terakhir)
 //  Semua objek ditempel ke nomor candle (xloc.bar_index) supaya selalu
 //  pas di candle yang sama saat chart digeser / di-scale.
@@ -303,6 +362,15 @@ if barstate.islast
                 drawnRbr.push(zi)
                 drawn += 1
 
+    // ---------- Garis scan DBD/RBR (LTF 1, 2, 3) ----------
+    if inShow15
+        scanDraw(d1, 'DBD ' + str.tostring(inLtf1) + 'S', color.orange, minX, lns, lbs)
+        scanDraw(r1, 'RBR ' + str.tostring(inLtf1) + 'S', color.teal, minX, lns, lbs)
+        scanDraw(d2, 'DBD ' + str.tostring(inLtf2) + 'S', color.orange, minX, lns, lbs)
+        scanDraw(r2, 'RBR ' + str.tostring(inLtf2) + 'S', color.teal, minX, lns, lbs)
+        scanDraw(d3, 'DBD ' + str.tostring(inLtf3) + 'S', color.orange, minX, lns, lbs)
+        scanDraw(r3, 'RBR ' + str.tostring(inLtf3) + 'S', color.teal, minX, lns, lbs)
+        
     // ---------- Swing (ZigZag) ----------
     [swP, swIdx, swT] = core.swingPivots(store)
 
@@ -404,15 +472,15 @@ if barstate.islast
         if not na(loBase)
             greenY := math.min(greenY, loBase - syminfo.mintick)
 
-            // ---------- Tidak ketemu area RBR: pakai hasil telusur library (skip body, turun ke lembah lebih rendah) ----------
-            if not greenValid and not inManualGreen and na(lkGreen)
-                greenY := greenCl.price
-                greenStart := na(greenCl.refIdx) ? bar_index : greenCl.refIdx
+        // ---------- Tidak ketemu area RBR: pakai hasil telusur library (skip body, turun ke lembah lebih rendah) ----------
+        if not greenValid and not inManualGreen and na(lkGreen)
+            greenY := greenCl.price
+            greenStart := na(greenCl.refIdx) ? bar_index : greenCl.refIdx
 
-            // ---------- Pink: sama, kalau tidak ketemu area DBD ----------
-            if not pinkValid and not inManualPink and na(lkPink)
-                pinkY := pinkCl.price
-                pinkStart := na(pinkCl.refIdx) ? bar_index : pinkCl.refIdx
+        // ---------- Pink: sama, kalau tidak ketemu area DBD ----------
+        if not pinkValid and not inManualPink and na(lkPink)
+            pinkY := pinkCl.price
+            pinkStart := na(pinkCl.refIdx) ? bar_index : pinkCl.refIdx
 
     // ---------- Tidak ketemu area RBR: garis putus-putus tepat di low swing terakhir ----------
     if not greenValid and not inManualGreen and na(lkGreen)
