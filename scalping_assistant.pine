@@ -1,5 +1,5 @@
 //@version=6
-indicator('7seas_scalping_assistant v2.6', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
+indicator('7seas_scalping_assistant v2.7', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
 
 // Angka versi di akhir harus sama dengan versi publish library seven_seas_core (lihat halaman script library)
 import michelle_lawardi/seven_seas_core/6 as core
@@ -19,6 +19,7 @@ inSens = input.string('LOW', 'Select Sensitivity', options = ['LOW', 'MEDIUM', '
 inAvgLb = input.int(100, 'Avg Body Lookback (Candles)', minval = 1, step = 1, group = gDet, tooltip = 'Jika diubah lebih dari 190, naikkan max_bars_back di indicator().')
 inMinGrade = input.string('K', 'Min. Grade to Show', options = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K'], group = gDet, tooltip = 'Pilih C: tampil C, B, A. Pilih B: tampil B, A. K = tampilkan semua.')
 inBaseBody = true
+inShowBase = input.bool(true, 'Show Base', group = gDet, tooltip = 'Centang: zona DBD dan RBR ditampilkan. Uncheck: zona hanya disembunyikan, perhitungan garis control tetap berjalan.')
 
 // gShow = 'Tampilan'
 inShowDbd = true
@@ -166,6 +167,33 @@ drawBackupFib(float y, bool isRoof, float h, int left, bool valid, color col, ar
     float sl = isRoof ? y + h * (inClPct / 100.0) : y - h * (inClPct / 100.0)
     ls.push(line.new(x1 = left, y1 = sl, x2 = bar_index + 5, y2 = sl, xloc = xloc.bar_index, color = color.red, width = 1))
     lb.push(label.new(x = bar_index + 5, y = sl, xloc = xloc.bar_index, text = str.tostring(sl, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.red, size = size.small))
+
+// Warna per area (siklus 6 warna), opacity dikurangi (transparansi 85)
+bandCol(int k) =>
+    color c = switch k % 6
+        0 => color.blue
+        1 => color.green
+        2 => color.yellow
+        3 => color.orange
+        4 => color.purple
+        => color.fuchsia
+    color.new(c, 85)
+
+// Satu box per area (dari garis pertama sampai garis terakhir), teks "Area X" di tengah
+// k = nomor area (0 = A, 1 = B, ...)
+// lim = batas area global (atrLim), dipakai sama untuk semua area
+drawBands(float yTop, float yBot, int left, int k, float lim, array<box> bx, array<label> lb) =>
+    int right = bar_index + 5
+    bx.push(box.new(left = left, top = yTop, right = right, bottom = yBot, xloc = xloc.bar_index, border_color = na, bgcolor = bandCol(k)))
+    string nm = 'Area ' + str.substring('ABCDEFGHIJKLMNOPQRSTUVWXYZ', k % 26, k % 26 + 1)
+    float hx10 = math.abs(yTop - yBot) * 10
+    bool over = not na(lim) and hx10 > lim
+    color atrCol = over ? color.red : color.black
+    float yMid = (yTop + yBot) / 2
+    // teks ATR di paling kanan, teks Area di sebelah kirinya
+    lb.push(label.new(x = right, y = yMid, xloc = xloc.bar_index, text = '| ATR: ' + str.tostring(hx10, format.mintick), style = label.style_label_right, color = color.new(color.black, 100), textcolor = atrCol, size = size.small))
+    lb.push(label.new(x = right - 8, y = yMid, xloc = xloc.bar_index, text = nm, style = label.style_label_right, color = color.new(color.black, 100), textcolor = chart.fg_color, size = size.small))
+
 
 // proximal ditentukan dari close candle setelah leg out (baseR + 2)
 // dflt dipakai selama candle itu belum close
@@ -400,10 +428,11 @@ if barstate.islast
             core.Zone zn = store.dbd.get(zi)
             [legBad, legMsg] = legInCheck(zn)
             if not zn.supp and (inDevMode or (not bodyEngulfed(zn) and not legBad)) and zn.right >= minX
-                color col = zn.isSingle ? color.blue : color.orange
-                bxs.push(box.new(left = math.max(zn.left, minX), top = zn.top, right = bar_index, bottom = zn.bot, xloc = xloc.bar_index, border_color = col, border_width = 1, bgcolor = color.new(col, 85)))
-                if inShowLbl and zn.lblX >= minX
-                    lbs.push(label.new(x = zn.lblX, y = zn.top, xloc = xloc.bar_index, text = zn.txt, style = label.style_label_down, color = zn.isSingle ? color.yellow : color.orange, textcolor = color.black, size = size.tiny, tooltip = tipEngulf(zn.tip, inDevMode and bodyEngulfed(zn), inDevMode ? legMsg : '')))
+                if inShowBase
+                    color col = zn.isSingle ? color.blue : color.orange
+                    bxs.push(box.new(left = math.max(zn.left, minX), top = zn.top, right = bar_index, bottom = zn.bot, xloc = xloc.bar_index, border_color = col, border_width = 1, bgcolor = color.new(col, 85)))
+                    if inShowLbl and zn.lblX >= minX
+                        lbs.push(label.new(x = zn.lblX, y = zn.top, xloc = xloc.bar_index, text = zn.txt, style = label.style_label_down, color = zn.isSingle ? color.yellow : color.orange, textcolor = color.black, size = size.tiny, tooltip = tipEngulf(zn.tip, inDevMode and bodyEngulfed(zn), inDevMode ? legMsg : '')))
                 drawnDbd.push(zi)
                 drawn += 1
 
@@ -416,10 +445,11 @@ if barstate.islast
             core.Zone zn = store.rbr.get(zi)
             [legBad, legMsg] = legInCheck(zn)
             if not zn.supp and (inDevMode or (not bodyEngulfed(zn) and not legBad)) and zn.right >= minX
-                color col = zn.isSingle ? color.green : color.teal
-                bxs.push(box.new(left = math.max(zn.left, minX), top = zn.top, right = bar_index, bottom = zn.bot, xloc = xloc.bar_index, border_color = col, border_width = 1, bgcolor = color.new(col, 85)))
-                if inShowLbl and zn.lblX >= minX
-                    lbs.push(label.new(x = zn.lblX, y = zn.bot, xloc = xloc.bar_index, text = zn.txt, style = label.style_label_up, color = col, textcolor = zn.isSingle ? color.black : color.white, size = size.tiny, tooltip = tipEngulf(zn.tip, inDevMode and bodyEngulfed(zn), inDevMode ? legMsg : '')))
+                if inShowBase
+                    color col = zn.isSingle ? color.green : color.teal
+                    bxs.push(box.new(left = math.max(zn.left, minX), top = zn.top, right = bar_index, bottom = zn.bot, xloc = xloc.bar_index, border_color = col, border_width = 1, bgcolor = color.new(col, 85)))
+                    if inShowLbl and zn.lblX >= minX
+                        lbs.push(label.new(x = zn.lblX, y = zn.bot, xloc = xloc.bar_index, text = zn.txt, style = label.style_label_up, color = col, textcolor = zn.isSingle ? color.black : color.white, size = size.tiny, tooltip = tipEngulf(zn.tip, inDevMode and bodyEngulfed(zn), inDevMode ? legMsg : '')))
                 drawnRbr.push(zi)
                 drawn += 1
 
@@ -644,6 +674,7 @@ if barstate.islast
                 lns.push(line.new(x1 = bxH, y1 = bYH, x2 = bar_index + 5, y2 = bYH, xloc = xloc.bar_index, color = color.new(inPinkCol, 40), style = bValidH ? line.style_solid : line.style_dashed, width = 1))
                 if not na(fibH)
                     drawBackupFib(bYH, true, fibH, bxH, bValidH, inPinkCol, lns, lbs)
+                    drawBands(bYH, bYH - fibH, bxH, n + 1, atrLim, bxs, lbs)
                 prevH := bYH
 
         if greenOk
@@ -678,6 +709,7 @@ if barstate.islast
                 // lbs.push(label.new(x = bar_index + 3, y = bYL, xloc = xloc.bar_index, text = 'Lantai Cadangan ' + str.tostring(n) + ' | ' + str.tostring(bYL, format.mintick), style = label.style_label_upper_left, color = color.new(color.black, 100), textcolor = inGreenCol, size = size.small))
                 if not na(fibH)
                     drawBackupFib(bYL, false, fibH, bxL, bValidL, inGreenCol, lns, lbs)
+                    drawBands(bYL + fibH, bYL, bxL, n + 3, atrLim, bxs, lbs)   // lantai cadangan
                 prevL := bYL
 
 
@@ -709,12 +741,17 @@ if barstate.islast
             lbs.push(label.new(x = bar_index + 5, y = yUp, xloc = xloc.bar_index, text = str.tostring(yUp, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = inPinkCol, size = size.small))
             lbs.push(label.new(x = bar_index + 5, y = yLo, xloc = xloc.bar_index, text = str.tostring(yLo, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = inGreenCol, size = size.small))
 
+        drawBands(pinkY, topB, fibLeft, 0, atrLim, bxs, lbs)   // Area A
+        drawBands(botB, greenY, fibLeft, 1, atrLim, bxs, lbs)  // Area B
+
         float zoneH = pinkY - topB
+        float zoneHx10 = zoneH * 10
 
         // info ATR di header: ATR Daily mentah, batas, dan tinggi area upper
-        string atrTxt = 'ATR D: ' + str.tostring(atrD, format.mintick) + ' | Batas: ' + str.tostring(atrLim, format.mintick) + ' | Tinggi Area: ' + str.tostring(zoneH, format.mintick)
-        bool atrOver = atrSrcOk and zoneH > atrLim
-        string atrWarn = not atrSrcOk ? '  |  ATR belum tersedia (Tinggi Area: ' + str.tostring(zoneH, format.mintick) + ')' : (atrOver ? '  |  WARNING! Area Buy/Sell > ATR (' + atrTxt + ')' : '  |  Tidak Ada Warning ATR (' + atrTxt + ')')
+        // info ATR di header: ATR Daily mentah, batas, dan tinggi area upper (x10)
+        string atrTxt = 'ATR D: ' + str.tostring(atrD, format.mintick) + ' | Batas: ' + str.tostring(atrLim, format.mintick) + ' | Tinggi Area: ' + str.tostring(zoneHx10, format.mintick)
+        bool atrOver = atrSrcOk and zoneHx10 > atrLim
+        string atrWarn = not atrSrcOk ? '  |  ATR belum tersedia (Tinggi Area: ' + str.tostring(zoneHx10, format.mintick) + ')' : (atrOver ? '  |  WARNING! Area Buy/Sell > ATR (' + atrTxt + ')' : '  |  Tidak Ada Warning ATR (' + atrTxt + ')')
         table.cell(sellTbl, 0, 0, inShowTouch ? 'SELL INFO' + atrWarn : '', text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = (atrOver or not atrSrcOk) ? color.new(color.red, 30) : color.new(color.gray, 40))
 
         float slUp = pinkY + zoneH * (inClPct / 100.0)
