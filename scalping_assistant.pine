@@ -1,5 +1,5 @@
 //@version=6
-indicator('7seas_scalping_assistant v2.3', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
+indicator('7seas_scalping_assistant v2.4', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
 
 // Angka versi di akhir harus sama dengan versi publish library seven_seas_core (lihat halaman script library)
 import michelle_lawardi/seven_seas_core/6 as core
@@ -7,56 +7,52 @@ import michelle_lawardi/seven_seas_core/6 as core
 // =====================================================================
 //  INPUT
 // =====================================================================
+
+gOptions = 'Options'
+inShowZZ = input.bool(true, 'Show ZigZag Lines', group = gOptions)
+inSwBasis = input.string('Wick', 'Swing High/Low Source', options = ['Body', 'Wick'], group = gOptions)
+inShowCtrl = input.bool(true, 'Show Control Line', group = gOptions)
+
+
 gDet = 'UFO / BASE'
 inSens = input.string('LOW', 'Select Sensitivity', options = ['LOW', 'MEDIUM', 'HIGH'], group = gDet)
 inAvgLb = input.int(100, 'Avg Body Lookback (Candles)', minval = 1, step = 1, group = gDet, tooltip = 'Jika diubah lebih dari 190, naikkan max_bars_back di indicator().')
 inMinGrade = input.string('K', 'Min. Grade to Show', options = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K'], group = gDet, tooltip = 'Pilih C: tampil C, B, A. Pilih B: tampil B, A. K = tampilkan semua.')
-inBaseBody = input.bool(true, 'Base Body Height vs. Leg In/Out (Base Body Must Not Be Larger)', group = gDet)
+inBaseBody = true
 
-gShow = 'Tampilan'
-inShowDbd = input.bool(true, 'Show DBD Zones', group = gShow)
-inShowRbr = input.bool(true, 'Show RBR Zones', group = gShow)
-inShowLbl = input.bool(true, 'Show Grade Labels', group = gShow)
+// gShow = 'Tampilan'
+inShowDbd = true
+inShowRbr = true
+inShowLbl = true
 
+inPinkCol =color.rgb(255, 105, 180)
+inGreenCol = color.rgb(0, 110, 0)
 
-gSw = 'Swing Indicator'
-inShowZZ = input.bool(true, 'Show ZigZag Lines', group = gSw)
-inSwBasis = input.string('Wick', 'Swing High/Low Source', options = ['Body', 'Wick'], group = gSw)
-
-gDbg = 'Debug'
-inOverlap = input.bool(false, 'Disable Overlap Score', group = gDbg)
-inDevMode = input.bool(false, 'DEV MODE', group = gDbg, tooltip = 'Centang: rule Body Engulfed dinonaktifkan, zona yang body base-nya tertutup utuh tetap digambar dan ditandai kode 13 di tooltip. Tidak dicentang: Body Engulfed aktif, zona yang ketabrak tidak digambar.')
-
-inShowCtrl = input.bool(true, 'Show Control Line', group = gSw)
-
-
-inPinkCol = input.color(color.rgb(255, 105, 180), 'Upper Zone Color (Swing High Control Line)', group = gSw)
-// inGreenCol = input.color(color.lime, 'Lower Zone Color (Swing Low Control Line)', group = gSw)
-inGreenCol = input.color(color.rgb(0, 110, 0), 'Lower Zone Color (Swing Low Control Line)', group = gSw)
-
+gSw = "Scalping Indicator"
 inManualPink = input.bool(false, "Manual Pink Control", group = gSw)
 inPinkMan = input.price(1.0, "Pink Control Price", group = gSw)
-
 inManualGreen = input.bool(false, "Manual Green Control", group = gSw)
 inGreenMan = input.price(1.0, "Green Control Price", group = gSw)
-
-
 inGapCnt = input.int(4, 'Jumlah Gap Garis Zona', minval = 1, maxval = 20, group = gSw, tooltip = 'Jumlah gap di tiap zona. Isi 4 berarti terbentuk 5 garis di zona atas dan 5 garis di zona bawah.')
-
-inShowNotes = input.bool(false, 'Show Control Notes', group = gSw, tooltip = 'Tampilkan label catatan di kanan garis control: kenapa garis solid atau putus-putus, dan swing mana yang dilewati.')
-
-inSendAlert = input.bool(false, 'Send Control Lines via Alert', group = gSw, tooltip = 'Kirim garis control atas dan bawah lewat alert() setiap kali nilainya berubah. Buat alert dengan kondisi "Any alert() function call".')
-gTouch = 'Touch Info'
-inShowTouch = input.bool(true, 'Show Touch Info (Kiri Bawah)', group = gTouch)
-inTpLayer = input.int(4, 'Layer Mulai TP di Proximal', minval = 2, maxval = 21, group = gTouch, tooltip = 'Jika harga sudah mencapai garis ini (atau lebih dalam), TP dipindah dari TP Maximal ke proximal (garis 1).')
-
-inMaxBack = input.int(1500, 'Max Candle ke Belakang (Gambar)', minval = 300, maxval = 4800, step = 100, group = gTouch, tooltip = 'Objek yang lebih tua dari jumlah candle ini tidak digambar. Kalau muncul error "historical buffer limit", turunkan angkanya di bawah nilai limit di pesan error.')
+inClPct = input.float(20.0, 'Cut Loss (% tinggi area)', minval = 1.0, maxval = 100.0, step = 5.0, group = gSw, tooltip = 'Jarak garis CL (merah) dari garis control, dihitung sebagai persen dari tinggi area upper/lower (25%). Default 20.')
 
 gScan = 'Scan'
 inShow15 = input.bool(true, 'Show DBD/RBR Scan', group = gScan)
-inLtf1 = input.int(15, 'LTF 1 (detik, 0 = nonaktif)', minval = 0, group = gScan, tooltip = 'Harus lebih kecil dari timeframe chart. Contoh: 5, 10, 15, 30.')
+inLtf1 = input.int(0, 'LTF 1 (detik, 0 = nonaktif)', minval = 0, group = gScan, tooltip = 'Harus lebih kecil dari timeframe chart. Contoh: 5, 10, 15, 30.')
 inLtf2 = input.int(0, 'LTF 2 (detik, 0 = nonaktif)', minval = 0, group = gScan)
 inLtf3 = input.int(0, 'LTF 3 (detik, 0 = nonaktif)', minval = 0, group = gScan)
+
+
+gDbg = 'For Debuging Purpose'
+inOverlap = input.bool(false, 'Disable Overlap Score', group = gDbg)
+inDevMode = input.bool(false, 'DEV MODE', group = gDbg, tooltip = 'Centang: rule Body Engulfed dinonaktifkan, zona yang body base-nya tertutup utuh tetap digambar dan ditandai kode 13 di tooltip. Tidak dicentang: Body Engulfed aktif, zona yang ketabrak tidak digambar.')
+inShowNotes = input.bool(false, 'Show Control Notes', group = gDbg, tooltip = 'Tampilkan label catatan di kanan garis control: kenapa garis solid atau putus-putus, dan swing mana yang dilewati.')
+inSendAlert = input.bool(false, 'Send Control Lines via Alert', group = gDbg, tooltip = 'Kirim garis control atas dan bawah lewat alert() setiap kali nilainya berubah. Buat alert dengan kondisi "Any alert() function call".')
+inShowTouch = input.bool(true, 'Show Touch Info (Kiri Bawah)', group = gDbg)
+inTpLayer = input.int(4, 'Layer Mulai TP di Proximal', minval = 2, maxval = 21, group = gDbg, tooltip = 'Jika harga sudah mencapai garis ini (atau lebih dalam), TP dipindah dari TP Maximal ke proximal (garis 1).')
+inMaxBack = input.int(1500, 'Max Candle ke Belakang (Gambar)', minval = 300, maxval = 4800, step = 100, group = gDbg, tooltip = 'Objek yang lebih tua dari jumlah candle ini tidak digambar. Kalau muncul error "historical buffer limit", turunkan angkanya di bawah nilai limit di pesan error.')
+
+
 
 
 // =====================================================================
@@ -180,14 +176,16 @@ tipEngulf(string t, bool engulfed) =>
 alertcondition(newDbd, 'DBD baru', 'Zona DBD baru terbentuk')
 alertcondition(newRbr, 'RBR baru', 'Zona RBR baru terbentuk')
 
-// deteksi DBD/RBR di konteks LTF. Kode: 1 = DBD, 2 = RBR, 3 = keduanya
-scanDetect() =>
-    core.Config c = core.Config.new(sensitivity = inSens, devMode = true, avgLookback = inAvgLb, minGrade = inMinGrade, baseBodyCheck = inBaseBody, tag = 'scalping')
-    [vDS, eDS, cDS] = core.dbdSingle(c)
-    [vRS, eRS, cRS] = core.rbrSingle(c)
-    [nDM, eDM, cDM] = core.dbdMultiple(c)
-    [nRM, eRM, cRM] = core.rbrMultiple(c)
-    ((vDS or nDM != 0) ? 1 : 0) + ((vRS or nRM != 0) ? 2 : 0)
+scanDetect(bool on) =>
+    int res = 0
+    if on
+        core.Config c = core.Config.new(sensitivity = inSens, devMode = true, avgLookback = inAvgLb, minGrade = inMinGrade, baseBodyCheck = inBaseBody, tag = 'scalping')
+        [vDS, eDS, cDS] = core.dbdSingle(c)
+        [vRS, eRS, cRS] = core.rbrSingle(c)
+        [nDM, eDM, cDM] = core.dbdMultiple(c)
+        [nRM, eRM, cRM] = core.rbrMultiple(c)
+        res := ((vDS or nDM != 0) ? 1 : 0) + ((vRS or nRM != 0) ? 2 : 0)
+    res
 
 // catat bar_index candle chart yang punya sinyal (array dikirim sebagai argumen)
 scanRecord(array<int> res, array<int> idxD, array<int> idxR) =>
@@ -208,13 +206,17 @@ bool ok1 = inShow15 and inLtf1 > 0 and inLtf1 < timeframe.in_seconds()
 bool ok2 = inShow15 and inLtf2 > 0 and inLtf2 < timeframe.in_seconds()
 bool ok3 = inShow15 and inLtf3 > 0 and inLtf3 < timeframe.in_seconds()
 
-// timeframe selalu valid, walau inputnya 0 (nonaktif)
-ltfStr(int s) =>
-    s > 0 ? str.tostring(s) + 'S' : '1S'
 
-array<int> res1 = request.security_lower_tf(syminfo.tickerid, ltfStr(inLtf1), scanDetect())
-array<int> res2 = request.security_lower_tf(syminfo.tickerid, ltfStr(inLtf2), scanDetect())
-array<int> res3 = request.security_lower_tf(syminfo.tickerid, ltfStr(inLtf3), scanDetect())
+array<int> res1 = array.new_int()
+array<int> res2 = array.new_int()
+array<int> res3 = array.new_int()
+
+if ok1
+    res1 := request.security_lower_tf(syminfo.tickerid, str.tostring(inLtf1) + 'S', scanDetect(true))
+if ok2
+    res2 := request.security_lower_tf(syminfo.tickerid, str.tostring(inLtf2) + 'S', scanDetect(true))
+if ok3
+    res3 := request.security_lower_tf(syminfo.tickerid, str.tostring(inLtf3) + 'S', scanDetect(true))
 
 var array<int> d1 = array.new_int()
 var array<int> r1 = array.new_int()
@@ -334,7 +336,7 @@ if barstate.islast
     if inShowDbd and store.dbd.size() > 0
         int drawn = 0
         for zi = store.dbd.size() - 1 to 0
-            if drawn >= 240
+            if drawn >= 150
                 break
             core.Zone zn = store.dbd.get(zi)
             if not zn.supp and (inDevMode or not bodyEngulfed(zn)) and zn.right >= minX
@@ -350,7 +352,7 @@ if barstate.islast
     if inShowRbr and store.rbr.size() > 0
         int drawn = 0
         for zi = store.rbr.size() - 1 to 0
-            if drawn >= 240
+            if drawn >= 150
                 break
             core.Zone zn = store.rbr.get(zi)
             if not zn.supp and (inDevMode or not bodyEngulfed(zn)) and zn.right >= minX
@@ -582,8 +584,8 @@ if barstate.islast
         string atrWarn = not atrSrcOk ? '  |  ATR belum tersedia (Tinggi Area: ' + str.tostring(zoneH, format.mintick) + ')' : (atrOver ? '  |  WARNING! Area Buy/Sell > ATR (' + atrTxt + ')' : '  |  Tidak Ada Warning ATR (' + atrTxt + ')')
         table.cell(sellTbl, 0, 0, inShowTouch ? 'SELL INFO' + atrWarn : '', text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = (atrOver or not atrSrcOk) ? color.new(color.red, 30) : color.new(color.gray, 40))
 
-        float slUp = pinkY + zoneH * 0.2
-        float slLo = greenY - zoneH * 0.2
+        float slUp = pinkY + zoneH * (inClPct / 100.0)
+        float slLo = greenY - zoneH * (inClPct / 100.0)
         lns.push(line.new(x1 = fibLeft, y1 = slUp, x2 = bar_index, y2 = slUp, xloc = xloc.bar_index, extend = extend.right, color = color.red, width = 1))
         lns.push(line.new(x1 = fibLeft, y1 = slLo, x2 = bar_index, y2 = slLo, xloc = xloc.bar_index, extend = extend.right, color = color.red, width = 1))
         // lbs.push(label.new(x = fibLeft, y = slUp, xloc = xloc.bar_index, text = 'CL', style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
