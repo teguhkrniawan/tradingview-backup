@@ -1,5 +1,5 @@
 //@version=6
-indicator('7seas_scalping_assistant v2.4', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
+indicator('7seas_scalping_assistant v2.5', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
 
 // Angka versi di akhir harus sama dengan versi publish library seven_seas_core (lihat halaman script library)
 import michelle_lawardi/seven_seas_core/6 as core
@@ -558,7 +558,8 @@ if barstate.islast
 
         [topB, botB, tpP] = core.fibZones(pinkY, greenY, 0.25)
         int fibLeft = math.max(pinkX, greenX)
-        lns.push(line.new(x1 = fibLeft, y1 = tpP, x2 = bar_index, y2 = tpP, xloc = xloc.bar_index, extend = extend.right, color = color.gray, width = 1))
+        lns.push(line.new(x1 = fibLeft, y1 = tpP, x2 = bar_index + 5, y2 = tpP, xloc = xloc.bar_index, color = color.gray, width = 1))
+        lbs.push(label.new(x = bar_index + 5, y = tpP, xloc = xloc.bar_index, text = str.tostring(tpP, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.gray, size = size.small))
 
         for g = 0 to inGapCnt
             float f = g / float(inGapCnt)
@@ -568,13 +569,13 @@ if barstate.islast
                 touchUp := math.max(touchUp, inGapCnt - g + 1)
             if low <= yLo
                 touchLo := math.max(touchLo, g + 1)
-            // garis di level control tidak digambar ulang kalau control putus-putus (supaya dashed tidak tertutup solid)
+            // garis gap: tidak mentok kanan (tetap 5 candle), ada harga di ujung kanan
             if g > 0 or pinkValid
-                lns.push(line.new(x1 = fibLeft, y1 = yUp, x2 = bar_index, y2 = yUp, xloc = xloc.bar_index, extend = extend.right, color = inPinkCol, width = 1))
+                lns.push(line.new(x1 = fibLeft, y1 = yUp, x2 = bar_index + 5, y2 = yUp, xloc = xloc.bar_index, color = inPinkCol, width = 1))
             if g < inGapCnt or greenValid
-                lns.push(line.new(x1 = fibLeft, y1 = yLo, x2 = bar_index, y2 = yLo, xloc = xloc.bar_index, extend = extend.right, color = inGreenCol, width = 1))
-            //lbs.push(label.new(x = fibLeft, y = yUp, xloc = xloc.bar_index, text = str.tostring(inGapCnt - g + 1), style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
-            //lbs.push(label.new(x = fibLeft, y = yLo, xloc = xloc.bar_index, text = str.tostring(g + 1), style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
+                lns.push(line.new(x1 = fibLeft, y1 = yLo, x2 = bar_index + 5, y2 = yLo, xloc = xloc.bar_index, color = inGreenCol, width = 1))
+            lbs.push(label.new(x = bar_index + 5, y = yUp, xloc = xloc.bar_index, text = str.tostring(yUp, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = inPinkCol, size = size.small))
+            lbs.push(label.new(x = bar_index + 5, y = yLo, xloc = xloc.bar_index, text = str.tostring(yLo, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = inGreenCol, size = size.small))
 
         float zoneH = pinkY - topB
 
@@ -586,8 +587,10 @@ if barstate.islast
 
         float slUp = pinkY + zoneH * (inClPct / 100.0)
         float slLo = greenY - zoneH * (inClPct / 100.0)
-        lns.push(line.new(x1 = fibLeft, y1 = slUp, x2 = bar_index, y2 = slUp, xloc = xloc.bar_index, extend = extend.right, color = color.red, width = 1))
-        lns.push(line.new(x1 = fibLeft, y1 = slLo, x2 = bar_index, y2 = slLo, xloc = xloc.bar_index, extend = extend.right, color = color.red, width = 1))
+        lns.push(line.new(x1 = fibLeft, y1 = slUp, x2 = bar_index + 5, y2 = slUp, xloc = xloc.bar_index, color = color.red, width = 1))
+        lns.push(line.new(x1 = fibLeft, y1 = slLo, x2 = bar_index + 5, y2 = slLo, xloc = xloc.bar_index, color = color.red, width = 1))
+        lbs.push(label.new(x = bar_index + 5, y = slUp, xloc = xloc.bar_index, text = str.tostring(slUp, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.red, size = size.small))
+        lbs.push(label.new(x = bar_index + 5, y = slLo, xloc = xloc.bar_index, text = str.tostring(slLo, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.red, size = size.small))
         // lbs.push(label.new(x = fibLeft, y = slUp, xloc = xloc.bar_index, text = 'CL', style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
         // lbs.push(label.new(x = fibLeft, y = slLo, xloc = xloc.bar_index, text = 'CL', style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
 
