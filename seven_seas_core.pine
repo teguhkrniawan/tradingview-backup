@@ -52,6 +52,7 @@ export type Zone
 	int err // jumlah error (0 = grade A)
 	bool dead = false // ekor base sudah tertabrak body di kanan
 	bool supp = false // kalah overlap dengan zona lain
+    bool hidden = false // tidak tergambar di indikator pemanggil (diisi indikator scalping)
 
 // Seluruh state library
 export type Store
@@ -935,13 +936,14 @@ baseAktif(Store s, int i, bool isHigh) =>
     if i >= 0 and i < bf.size()
         if bf.get(i) == 1
             int zid = bz.get(i)
-            if s.cfg.devMode
-                ok := s.cfg.disableOverlap or zid >= 0
-                ok
-            else
-                if zid >= 0 and zid < zs.size()
-                    ok := not zs.get(zid).dead
-                    ok
+            if zid >= 0 and zid < zs.size()
+                Zone zh = zs.get(zid)
+                if s.cfg.devMode
+                    ok := not zh.hidden
+                else
+                    ok := not zh.dead and not zh.hidden
+            else if s.cfg.devMode
+                ok := s.cfg.disableOverlap
     ok
 
 // Ekor terjauh seluruh base pada pola yang sama
@@ -1018,6 +1020,8 @@ controlLineCore(Store s, bool isHigh, array<float> swP, array<int> swIdx, array<
                 // leg in = bagian pola, bukan base, candle kanannya base
                 bool isLegIn = pat.get(i) == 1 and bflag.get(i) == 0 and i + 1 < bflag.size() and bflag.get(i + 1) == 1
                 bool kiriBase = i >= 1 and baseAktif(s, i - 1, isHigh)
+                // scalping + RBR & DBD: kena leg in tidak dianggap valid, harus kena leg out + base
+                bool legInBlocked = s.cfg.tag == 'scalping'
                 // leg out = bagian pola, bukan base, candle kirinya base
                 bool isLegOut = pat.get(i) == 1 and bflag.get(i) == 0 and i >= 1 and bflag.get(i - 1) == 1
 
@@ -1037,7 +1041,7 @@ controlLineCore(Store s, bool isHigh, array<float> swP, array<int> swIdx, array<
                     valid := true
                     hitIdx := i
                     break
-                else if inRange and isLegIn and kiriBase
+                else if inRange and isLegIn and kiriBase and not legInBlocked
                     // skenario 2: kena leg in, candle kirinya base aktif
                     price := baseExtreme(s, i - 1, isHigh)
                     valid := true

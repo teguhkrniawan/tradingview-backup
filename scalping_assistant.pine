@@ -1,8 +1,8 @@
 //@version=6
-indicator('7seas_scalping_assistant v1.7', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
+indicator('7seas_scalping_assistant v2.1', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
 
 // Angka versi di akhir harus sama dengan versi publish library seven_seas_core (lihat halaman script library)
-import michelle_lawardi/seven_seas_core/4 as core
+import michelle_lawardi/seven_seas_core/6 as core
 
 // =====================================================================
 //  INPUT
@@ -280,7 +280,7 @@ if barstate.islast
             core.Zone zn = store.dbd.get(zi)
             if not zn.supp and (inDevMode or not bodyEngulfed(zn)) and zn.right >= minX
                 color col = zn.isSingle ? color.blue : color.orange
-                bxs.push(box.new(left = math.max(zn.left, minX), top = zn.top, right = zn.right, bottom = zn.bot, xloc = xloc.bar_index, border_color = col, border_width = 1, bgcolor = color.new(col, 85)))
+                bxs.push(box.new(left = math.max(zn.left, minX), top = zn.top, right = bar_index, bottom = zn.bot, xloc = xloc.bar_index, border_color = col, border_width = 1, bgcolor = color.new(col, 85)))
                 if inShowLbl and zn.lblX >= minX
                     // lbs.push(label.new(x = zn.lblX, y = zn.top, xloc = xloc.bar_index, text = zn.txt, style = label.style_label_down, color = zn.isSingle ? color.yellow : color.orange, textcolor = color.black, size = size.tiny, tooltip = tipEngulf(zn.tip, inDevMode and bodyEngulfed(zn)) + '\n\n' + bodyEngulfDbg(zn)))
                     lbs.push(label.new(x = zn.lblX, y = zn.top, xloc = xloc.bar_index, text = zn.txt, style = label.style_label_down, color = zn.isSingle ? color.yellow : color.orange, textcolor = color.black, size = size.tiny, tooltip = tipEngulf(zn.tip, inDevMode and bodyEngulfed(zn))))
@@ -296,7 +296,7 @@ if barstate.islast
             core.Zone zn = store.rbr.get(zi)
             if not zn.supp and (inDevMode or not bodyEngulfed(zn)) and zn.right >= minX
                 color col = zn.isSingle ? color.green : color.teal
-                bxs.push(box.new(left = math.max(zn.left, minX), top = zn.top, right = zn.right, bottom = zn.bot, xloc = xloc.bar_index, border_color = col, border_width = 1, bgcolor = color.new(col, 85)))
+                bxs.push(box.new(left = math.max(zn.left, minX), top = zn.top, right = bar_index, bottom = zn.bot, xloc = xloc.bar_index, border_color = col, border_width = 1, bgcolor = color.new(col, 85)))
                 if inShowLbl and zn.lblX >= minX
                     // lbs.push(label.new(x = zn.lblX, y = zn.bot, xloc = xloc.bar_index, text = zn.txt, style = label.style_label_up, color = col, textcolor = zn.isSingle ? color.black : color.white, size = size.tiny, tooltip = tipEngulf(zn.tip, inDevMode and bodyEngulfed(zn)) + '\n\n' + bodyEngulfDbg(zn)))
                     lbs.push(label.new(x = zn.lblX, y = zn.bot, xloc = xloc.bar_index, text = zn.txt, style = label.style_label_up, color = col, textcolor = zn.isSingle ? color.black : color.white, size = size.tiny, tooltip = tipEngulf(zn.tip, inDevMode and bodyEngulfed(zn)) ))
@@ -404,6 +404,32 @@ if barstate.islast
         if not na(loBase)
             greenY := math.min(greenY, loBase - syminfo.mintick)
 
+            // ---------- Tidak ketemu area RBR: pakai hasil telusur library (skip body, turun ke lembah lebih rendah) ----------
+            if not greenValid and not inManualGreen and na(lkGreen)
+                greenY := greenCl.price
+                greenStart := na(greenCl.refIdx) ? bar_index : greenCl.refIdx
+
+            // ---------- Pink: sama, kalau tidak ketemu area DBD ----------
+            if not pinkValid and not inManualPink and na(lkPink)
+                pinkY := pinkCl.price
+                pinkStart := na(pinkCl.refIdx) ? bar_index : pinkCl.refIdx
+
+    // ---------- Tidak ketemu area RBR: garis putus-putus tepat di low swing terakhir ----------
+    if not greenValid and not inManualGreen and na(lkGreen)
+        float lastLowP = na
+        int lastLowIdx = na
+        if swP.size() > 0
+            for k = swP.size() - 1 to 0
+                if swT.get(k) == -1
+                    lastLowP := swP.get(k)
+                    lastLowIdx := swIdx.get(k)
+                    break
+        if na(lastLowP)
+            lastLowP := low
+            lastLowIdx := bar_index
+        greenY := lastLowP
+        greenStart := lastLowIdx
+
     // ---------- Kunci garis control selama setup (berubah hanya setelah cut loss) ----------
     if not na(lkPink) and not inManualPink
         pinkY := lkPink
@@ -472,8 +498,11 @@ if barstate.islast
                 touchUp := math.max(touchUp, inGapCnt - g + 1)
             if low <= yLo
                 touchLo := math.max(touchLo, g + 1)
-            lns.push(line.new(x1 = fibLeft, y1 = yUp, x2 = bar_index, y2 = yUp, xloc = xloc.bar_index, extend = extend.right, color = inPinkCol, width = 1))
-            lns.push(line.new(x1 = fibLeft, y1 = yLo, x2 = bar_index, y2 = yLo, xloc = xloc.bar_index, extend = extend.right, color = inGreenCol, width = 1))
+            // garis di level control tidak digambar ulang kalau control putus-putus (supaya dashed tidak tertutup solid)
+            if g > 0 or pinkValid
+                lns.push(line.new(x1 = fibLeft, y1 = yUp, x2 = bar_index, y2 = yUp, xloc = xloc.bar_index, extend = extend.right, color = inPinkCol, width = 1))
+            if g < inGapCnt or greenValid
+                lns.push(line.new(x1 = fibLeft, y1 = yLo, x2 = bar_index, y2 = yLo, xloc = xloc.bar_index, extend = extend.right, color = inGreenCol, width = 1))
             //lbs.push(label.new(x = fibLeft, y = yUp, xloc = xloc.bar_index, text = str.tostring(inGapCnt - g + 1), style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
             //lbs.push(label.new(x = fibLeft, y = yLo, xloc = xloc.bar_index, text = str.tostring(g + 1), style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
 
