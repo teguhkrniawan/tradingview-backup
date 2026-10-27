@@ -1,5 +1,5 @@
 //@version=6
-indicator('7seas_scalping_assistant v1.5', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
+indicator('7seas_scalping_assistant v1.6', overlay = true, max_bars_back = 5000, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
 
 // Angka versi di akhir harus sama dengan versi publish library seven_seas_core (lihat halaman script library)
 import michelle_lawardi/seven_seas_core/4 as core
@@ -51,6 +51,8 @@ inShowTouch = input.bool(true, 'Show Touch Info (Kiri Bawah)', group = gTouch)
 inTpLayer = input.int(4, 'Layer Mulai TP di Proximal', minval = 2, maxval = 21, group = gTouch, tooltip = 'Jika harga sudah mencapai garis ini (atau lebih dalam), TP dipindah dari TP Maximal ke proximal (garis 1).')
 
 inMaxBack = input.int(1500, 'Max Candle ke Belakang (Gambar)', minval = 300, maxval = 4800, step = 100, group = gTouch, tooltip = 'Objek yang lebih tua dari jumlah candle ini tidak digambar. Kalau muncul error "historical buffer limit", turunkan angkanya di bawah nilai limit di pesan error.')
+// inAtrLen = input.int(14, 'ATR Daily Length', minval = 1, group = gTouch)
+inAtrSrc = input.source(close, 'Sumber ATR (pilih: Average True Range > ATR)', group = gTouch)
 
 // =====================================================================
 //  CORE
@@ -136,6 +138,14 @@ cleanTip(string t) =>
         // hanya ada bagian "Mandatory": ganti judulnya
         r := str.replace_all(r, 'Mandatory (lolos karena DEV MODE):', 'Non mandatory (skor):')
     r
+
+// batas tinggi area: ATR daily * 10 * 20%, lalu * 25%
+// ATR pakem: selalu dari indikator ATR di chart (harus diset Timeframe = 1 day)
+// batas tinggi area = ATR * 10 * 20% * 25%
+float atrLim = inAtrSrc * 10 * 0.2 * 0.25
+bool atrSrcOk = inAtrSrc != close
+
+
 
 // Tambahkan kode 13 ke tooltip jika zona ketabrak tapi tetap digambar (DEV MODE)
 tipEngulf(string t, bool engulfed) =>
@@ -450,6 +460,13 @@ if barstate.islast
             //lbs.push(label.new(x = fibLeft, y = yLo, xloc = xloc.bar_index, text = str.tostring(g + 1), style = label.style_label_right, color = color.new(color.black, 50), textcolor = color.white, size = size.small))
 
         float zoneH = pinkY - topB
+
+        // info ATR di header (sumber pakem: indikator ATR Daily)
+        string atrTxt = 'ATR: ' + str.tostring(atrLim, format.mintick)
+        bool atrOver = atrSrcOk and zoneH > atrLim
+        string atrWarn = not atrSrcOk ? '  |  PILIH SUMBER ATR (indikator ATR Daily)' : (atrOver ? '  |  WARNING! Area Buy/Sell > ATR (' + atrTxt + ')' : '  |  Tidak Ada Warning ATR (' + atrTxt + ')')
+        table.cell(sellTbl, 0, 0, inShowTouch ? 'SELL INFO' + atrWarn : '', text_color = color.white, text_size = size.small, text_halign = text.align_left, bgcolor = (atrOver or not atrSrcOk) ? color.new(color.red, 30) : color.new(color.gray, 40))
+
         float slUp = pinkY + zoneH * 0.2
         float slLo = greenY - zoneH * 0.2
         lns.push(line.new(x1 = fibLeft, y1 = slUp, x2 = bar_index, y2 = slUp, xloc = xloc.bar_index, extend = extend.right, color = color.red, width = 1))
