@@ -121,6 +121,16 @@ proxByClose(float bLo, float bHi, int baseR, float dflt) =>
         r := store.clsA.get(c) >= (bLo + bHi) / 2 ? bHi : bLo
     r
 
+// cari index zona dari baseL (-1 kalau tidak ketemu)
+zoneIdxByBaseL(array<core.Zone> zs, int baseL) =>
+    int r = -1
+    if zs.size() > 0
+        for i = zs.size() - 1 to 0
+            if zs.get(i).baseL == baseL
+                r := i
+                break
+    r
+
 bodyEngulfDbg(core.Zone zn) =>
     float bt = store.topA.get(zn.baseL)
     float bb = store.botA.get(zn.baseL)
@@ -207,6 +217,9 @@ varip float rfProx = na
 
 varip bool flLogged = false
 varip bool rfLogged = false
+
+varip float flPxSave = na
+varip float rfPxSave = na
 
 addLog(array<string> arr, string m) =>
     if ready
@@ -611,6 +624,7 @@ if barstate.islast
                 floorPx := proxByClose(floorLo, floorHi, floorBaseR, floorLo)
                 break
         if not na(floorPx)
+            flPxSave := floorPx
             if na(flKey) or floorKey != flKey
                 flKey := floorKey
                 flConf := false
@@ -635,6 +649,13 @@ if barstate.islast
                     addLog(logB, msgFlC)
                     flConf := true
         else
+            // lantai sudah confirm, tapi zonanya gugur karena ketutup harga
+            if not na(flKey) and flConf and not inDevMode
+                int fzi = zoneIdxByBaseL(store.rbr, flKey)
+                if fzi >= 0 and bodyEngulfed(store.rbr.get(fzi))
+                    string msgFlX = 'Lantai di harga ' + str.tostring(flPxSave, format.mintick) + ' di Cancel karena ketutup harga'
+                    addLog(logS, msgFlX)
+                    addLog(logB, msgFlX)
             flKey := na
             flLogged := false
 
@@ -666,6 +687,7 @@ if barstate.islast
                 roofPx := proxByClose(roofLo, roofHi, roofBaseR, roofHi)
                 break
         if not na(roofPx)
+            rfPxSave := roofPx
             if na(rfKey) or roofKey != rfKey
                 rfKey := roofKey
                 rfConf := false
@@ -689,9 +711,15 @@ if barstate.islast
                     addLog(logB, msgRfC)
                     rfConf := true
         else
+            // atap sudah confirm, tapi zonanya gugur karena ketutup harga
+            if not na(rfKey) and rfConf and not inDevMode
+                int rzi = zoneIdxByBaseL(store.dbd, rfKey)
+                if rzi >= 0 and bodyEngulfed(store.dbd.get(rzi))
+                    string msgRfX = 'Atap di harga ' + str.tostring(rfPxSave, format.mintick) + ' di Cancel karena ketutup harga'
+                    addLog(logS, msgRfX)
+                    addLog(logB, msgRfX)
             rfKey := na
             rfLogged := false
-
         
     // ---------- Log berjalan SELL & BUY (terbaru di atas) ----------
     if inShowTouch
